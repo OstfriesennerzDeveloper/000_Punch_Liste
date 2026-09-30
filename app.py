@@ -5,7 +5,7 @@ st.title("Punchlist & Burndown Tool")
 st.subheader("Issue #1: Basis-System & Firebase")
 
 # 1. Formular zum Anlegen neuer Mängel
-with st.form("add_item_form"):
+with st.form("add_item_form", clear_on_submit=True):
 	titel = st.text_input("Titel des Mangels")
 	prioritaet = st.selectbox(
 		"Priorität",

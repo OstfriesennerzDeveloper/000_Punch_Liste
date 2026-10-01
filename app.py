@@ -1,4 +1,6 @@
 import streamlit as st
+import pandas as pd
+import io
 import db_service
 
 # --- KONFIGURATION & ZUGANGSDATEN ---
@@ -16,7 +18,7 @@ if "username" not in st.session_state:
     st.session_state.username = None
 
 st.title("Punchlist & Burndown Tool")
-st.subheader("Issue #3: Status-Tracking & Burndown")
+st.subheader("Issue #4: Automatisierter Excel-Export")
 
 # --- SIDEBAR: LOGIN / LOGOUT ---
 with st.sidebar:
@@ -49,17 +51,49 @@ with st.sidebar:
 # --- HAUPT-APP ---
 if st.session_state.logged_in:
     
-    # Daten abrufen
+    # DATEN ABRUFEN (Zentral für App und Export)
     items = db_service.get_items()
     
-    # --- NEU: BURNDOWN METRIKEN ---
+    # --- NEU: EXCEL-EXPORT IN DER SIDEBAR ---
+    with st.sidebar:
+        st.divider()
+        st.subheader("Projekt-Controlling")
+        
+        # Daten für Excel aufbereiten
+        export_data = []
+        for i in items:
+            export_data.append({
+                "Titel": i.get('titel', ''),
+                "Priorität": i.get('prioritaet', ''),
+                "Status": i.get('status', 'Offen')
+            })
+            
+        df = pd.DataFrame(export_data)
+        
+        # Leere Tabelle abfangen, falls noch keine Mängel existieren
+        if df.empty:
+            df = pd.DataFrame(columns=["Titel", "Priorität", "Status"])
+            
+        # Excel-Datei im Arbeitsspeicher generieren
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Mängelliste')
+            
+        # Download-Button
+        st.download_button(
+            label="📥 Excel-Matrix herunterladen",
+            data=buffer.getvalue(),
+            file_name="Punchlist_Matrix.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # --- BURNDOWN METRIKEN ---
     total_items = len(items)
     closed_items = [i for i in items if i['status'] == 'Erledigt']
     open_items = [i for i in items if i['status'] == 'Offen']
     
     closed_count = len(closed_items)
     open_count = len(open_items)
-    # Prozentrechnung (Verhindert Division durch Null)
     progress_percent = int((closed_count / total_items * 100)) if total_items > 0 else 0
     
     st.markdown("### Projekt-Fortschritt")
@@ -68,17 +102,13 @@ if st.session_state.logged_in:
     col2.metric("Offen", open_count)
     col3.metric("Erledigt", closed_count)
     
-    # Der visuelle Fortschrittsbalken
     st.progress(progress_percent / 100.0, text=f"Burndown: {progress_percent}% erledigt")
     st.divider()
 
-    # --- 1. Formular zum Anlegen neuer Mängel ---
+    # --- FORMULAR ---
     with st.form("add_item_form", clear_on_submit=True):
         titel = st.text_input("Neuen Mangel erfassen")
-        prioritaet = st.selectbox(
-            "Priorität", 
-            ["Sehr Hoch", "Hoch", "Mittel", "Niedrig", "Sehr Niedrig"]
-        )
+        prioritaet = st.selectbox("Priorität", ["Sehr Hoch", "Hoch", "Mittel", "Niedrig", "Sehr Niedrig"])
         submitted = st.form_submit_button("Mangel eintragen")
         
         if submitted and titel:
@@ -88,7 +118,7 @@ if st.session_state.logged_in:
 
     st.divider()
 
-    # --- NEU: MÄNGELLISTE MIT TABS ---
+    # --- MÄNGELLISTE MIT TABS ---
     tab1, tab2 = st.tabs(["📋 Offene Mängel", "✅ Erledigte Mängel"])
     
     with tab1:
@@ -102,12 +132,10 @@ if st.session_state.logged_in:
                 with col2:
                     st.write(item.get('prioritaet', ''))
                 with col3:
-                    # Statuswechsel dürfen alle machen
                     if st.button("✔ Erledigen", key=f"done_{item['id']}"):
                         db_service.update_status(item['id'], 'Erledigt')
                         st.rerun()
                 with col4:
-                    # Harten Lösch-Button darf nur der Admin sehen
                     if st.session_state.role == "Admin":
                         if st.button("🗑️", key=f"del_open_{item['id']}"):
                             db_service.delete_item(item['id'])
@@ -122,7 +150,6 @@ if st.session_state.logged_in:
             for item in closed_items:
                 col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
                 with col1:
-                    # Durchgestrichener Text für erledigte Mängel
                     st.write(f"~~{item.get('titel', '')}~~")
                 with col2:
                     st.write(item.get('prioritaet', ''))

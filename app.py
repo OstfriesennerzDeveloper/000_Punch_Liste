@@ -83,7 +83,7 @@ if st.session_state.logged_in:
             
             # 1. Überschriften stylen (Dunkelblau mit weißer Schrift)
             header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-            header_font = Font(color="FFFFFF", bold=True)
+            header_font = Font(color="FFFFFF", bold=True, size=14)
             
             for col_num, value in enumerate(df.columns.values):
                 cell = worksheet.cell(row=1, column=col_num + 1)

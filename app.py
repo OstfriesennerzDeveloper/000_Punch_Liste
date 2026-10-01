@@ -18,12 +18,11 @@ if "username" not in st.session_state:
     st.session_state.username = None
 
 st.title("Punchlist & Burndown Tool")
-st.subheader("Issue #5.2: Gewerke-Verwaltung & Kalender")
+st.subheader("Issue #7: Kommentare & Fortschritt (%)")
 
 # --- SIDEBAR: LOGIN & EINSTELLUNGEN ---
 with st.sidebar:
     st.header("Login-Bereich")
-    
     if not st.session_state.logged_in:
         with st.form("login_form"):
             username_input = st.text_input("Benutzername")
@@ -41,20 +40,16 @@ with st.sidebar:
                     st.error("Falscher Benutzername oder Passwort")
     else:
         st.write(f"Angemeldet als: **{st.session_state.username}**")
-        st.write(f"Rolle: **{st.session_state.role}**")
         if st.button("Ausloggen"):
             st.session_state.logged_in = False
             st.session_state.role = None
             st.session_state.username = None
             st.rerun()
             
-        # --- EINSTELLUNGEN FÜR GEWERKE (Nur für Admins) ---
         if st.session_state.role == "Admin":
             st.divider()
             with st.expander("⚙️ Gewerke verwalten"):
                 gewerke_liste = db_service.get_gewerke()
-                
-                # 1. Hinzufügen
                 st.write("**Neues Gewerk anlegen:**")
                 neues_gewerk = st.text_input("Neue Kategorie eintragen:")
                 if st.button("Hinzufügen") and neues_gewerk:
@@ -63,11 +58,9 @@ with st.sidebar:
                         st.success(f"'{neues_gewerk}' wurde hinzugefügt!")
                         st.rerun()
                     else:
-                        st.warning("Diese Kategorie existiert bereits!")
+                        st.warning("Existiert bereits!")
                 
                 st.divider()
-                
-                # 2. Löschen
                 st.write("**Gewerk löschen:**")
                 gewerk_zum_loeschen = st.selectbox("Kategorie auswählen:", gewerke_liste)
                 if st.button("🗑️ Löschen") and gewerk_zum_loeschen:
@@ -79,7 +72,7 @@ with st.sidebar:
 if st.session_state.logged_in:
     
     items = db_service.get_items()
-    gewerke_liste = db_service.get_gewerke() # Aktuelle Liste für das Dropdown
+    gewerke_liste = db_service.get_gewerke()
     
     # --- EXCEL-EXPORT ---
     with st.sidebar:
@@ -92,29 +85,26 @@ if st.session_state.logged_in:
                 "Titel": i.get('titel', ''),
                 "Priorität": i.get('prioritaet', ''),
                 "Gewerk": i.get('gewerk', 'Nicht zugewiesen'),
-                "Status": i.get('status', 'Offen'),
+                "Status (%)": f"{i.get('fortschritt', 0)}%", # NEU
+                "Kommentar": i.get('kommentar', ''),         # NEU
                 "Geplant bis": i.get('datum', 'Unbekannt')
             })
             
         df = pd.DataFrame(export_data)
-        
         if df.empty:
-            df = pd.DataFrame(columns=["Titel", "Priorität", "Gewerk", "Status", "Geplant bis"])
+            df = pd.DataFrame(columns=["Titel", "Priorität", "Gewerk", "Status (%)", "Kommentar", "Geplant bis"])
             
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Mängelliste')
-            
             worksheet = writer.sheets['Mängelliste']
             header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             header_font = Font(color="FFFFFF", bold=True, size=14)
-            
             for col_num, value in enumerate(df.columns.values):
                 cell = worksheet.cell(row=1, column=col_num + 1)
                 cell.fill = header_fill
                 cell.font = header_font
                 cell.alignment = Alignment(horizontal="center")
-                
             for idx, col in enumerate(worksheet.columns, 1):
                 max_length = 0
                 column_letter = get_column_letter(idx)
@@ -133,40 +123,33 @@ if st.session_state.logged_in:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-    # --- BURNDOWN METRIKEN ---
+    # --- METRIKEN ---
     total_items = len(items)
-    closed_items = [i for i in items if i['status'] == 'Erledigt']
-    open_items = [i for i in items if i['status'] == 'Offen']
-    
-    closed_count = len(closed_items)
-    open_count = len(open_items)
-    progress_percent = int((closed_count / total_items * 100)) if total_items > 0 else 0
+    closed_items = [i for i in items if i['status'] == 'Erledigt' or i.get('fortschritt') == 100]
+    open_items = [i for i in items if i['status'] == 'Offen' and i.get('fortschritt', 0) < 100]
     
     st.markdown("### Projekt-Fortschritt")
     col1, col2, col3 = st.columns(3)
     col1.metric("Gesamt Aufgaben", total_items)
-    col2.metric("Offen", open_count)
-    col3.metric("Erledigt", closed_count)
+    col2.metric("Offen", len(open_items))
+    col3.metric("Erledigt", len(closed_items))
+    progress_percent = int((len(closed_items) / total_items * 100)) if total_items > 0 else 0
     st.progress(progress_percent / 100.0, text=f"Burndown: {progress_percent}% erledigt")
     st.divider()
 
     # --- FORMULAR ---
     with st.form("add_item_form", clear_on_submit=True):
         titel = st.text_input("Neue Aufgabe / Mangel erfassen")
-        
         col_form1, col_form2, col_form3 = st.columns(3)
         with col_form1:
             prioritaet = st.selectbox("Priorität", ["Sehr Hoch", "Hoch", "Mittel", "Niedrig", "Sehr Niedrig"])
         with col_form2:
-            # Falls Liste leer, Rückfall auf Standard, um Fehler zu vermeiden
             sichere_liste = gewerke_liste if gewerke_liste else ["Bitte Gewerk anlegen"]
             gewerk = st.selectbox("Gewerk", sichere_liste)
         with col_form3:
-            # NEU: Kalender im Format TT.MM.JJJJ
             ziel_datum = st.date_input("Geplant bis", format="DD.MM.YYYY")
             
         submitted = st.form_submit_button("Eintragen")
-        
         if submitted and titel:
             datum_str = ziel_datum.strftime("%d.%m.%Y")
             db_service.add_item(titel, prioritaet, gewerk, datum_str)
@@ -175,7 +158,7 @@ if st.session_state.logged_in:
 
     st.divider()
 
-    # --- MÄNGELLISTE MIT TABS ---
+    # --- MÄNGELLISTE ---
     tab1, tab2 = st.tabs(["📋 Offene Aufgaben", "✅ Erledigt"])
     
     with tab1:
@@ -183,43 +166,52 @@ if st.session_state.logged_in:
             st.info("Super, keine offenen Aufgaben! 🎉")
         else:
             for item in open_items:
-                col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
-                with col1:
-                    st.write(f"**{item.get('titel', '')}**")
-                    st.caption(f"🔧 {item.get('gewerk', '')} | 🎯 Bis: {item.get('datum', '')}")
-                with col2:
-                    st.write(item.get('prioritaet', ''))
-                with col3:
-                    if st.button("✔ Erledigen", key=f"done_{item['id']}"):
-                        db_service.update_status(item['id'], 'Erledigt')
-                        st.rerun()
-                with col4:
-                    if st.session_state.role == "Admin":
-                        if st.button("🗑️", key=f"del_open_{item['id']}"):
-                            db_service.delete_item(item['id'])
+                # Nutze einen Expander für eine saubere Optik
+                with st.expander(f"🔴 {item.get('titel', '')} | {item.get('gewerk', '')} | 🎯 {item.get('datum', '')}"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        # Schieberegler für Status
+                        neu_fortschritt = st.select_slider(
+                            "Arbeitsfortschritt (%)", 
+                            options=[0, 25, 50, 75, 100], 
+                            value=item.get('fortschritt', 0), 
+                            key=f"prog_{item['id']}"
+                        )
+                        st.write(f"Priorität: **{item.get('prioritaet', '')}**")
+                    with col2:
+                        # Textfeld für Kommentare
+                        neu_kommentar = st.text_area(
+                            "Kommentar / Update", 
+                            value=item.get('kommentar', ''), 
+                            key=f"komm_{item['id']}"
+                        )
+                    
+                    col_btn1, col_btn2 = st.columns([1, 5])
+                    with col_btn1:
+                        if st.button("💾 Speichern", key=f"save_{item['id']}"):
+                            db_service.update_item_details(item['id'], neu_fortschritt, neu_kommentar)
+                            st.success("Aktualisiert!")
                             st.rerun()
-                    else:
-                        st.write("🔒")
+                    with col_btn2:
+                        if st.session_state.role == "Admin":
+                            if st.button("🗑️ Löschen", key=f"del_open_{item['id']}"):
+                                db_service.delete_item(item['id'])
+                                st.rerun()
 
     with tab2:
         if not closed_items:
             st.info("Noch keine Aufgaben abgearbeitet.")
         else:
             for item in closed_items:
-                col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
-                with col1:
-                    st.write(f"~~{item.get('titel', '')}~~")
-                    st.caption(f"🔧 {item.get('gewerk', '')} | 🎯 Bis: {item.get('datum', '')}")
-                with col2:
-                    st.write(item.get('prioritaet', ''))
-                with col3:
-                    if st.button("🔄 Wieder öffnen", key=f"reopen_{item['id']}"):
-                        db_service.update_status(item['id'], 'Offen')
-                        st.rerun()
-                with col4:
-                    if st.session_state.role == "Admin":
-                        if st.button("🗑️", key=f"del_closed_{item['id']}"):
-                            db_service.delete_item(item['id'])
+                with st.expander(f"🟢 ~~{item.get('titel', '')}~~ | {item.get('gewerk', '')}"):
+                    st.write(f"Kommentar: {item.get('kommentar', '-')}")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🔄 Wieder öffnen (Setzt Status auf 0%)", key=f"reopen_{item['id']}"):
+                            db_service.update_item_details(item['id'], 0, item.get('kommentar', ''))
                             st.rerun()
-                    else:
-                        st.write("🔒")
+                    with col2:
+                        if st.session_state.role == "Admin":
+                            if st.button("🗑️ Komplett löschen", key=f"del_closed_{item['id']}"):
+                                db_service.delete_item(item['id'])
+                                st.rerun()

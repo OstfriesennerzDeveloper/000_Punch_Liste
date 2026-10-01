@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import io
 import db_service
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 # --- KONFIGURATION & ZUGANGSDATEN ---
 USERS = {
@@ -18,7 +20,7 @@ if "username" not in st.session_state:
     st.session_state.username = None
 
 st.title("Punchlist & Burndown Tool")
-st.subheader("Issue #4: Automatisierter Excel-Export")
+st.subheader("Issue #4.1: Formatierter Excel-Export")
 
 # --- SIDEBAR: LOGIN / LOGOUT ---
 with st.sidebar:
@@ -51,15 +53,14 @@ with st.sidebar:
 # --- HAUPT-APP ---
 if st.session_state.logged_in:
     
-    # DATEN ABRUFEN (Zentral für App und Export)
+    # DATEN ABRUFEN
     items = db_service.get_items()
     
-    # --- NEU: EXCEL-EXPORT IN DER SIDEBAR ---
+    # --- EXCEL-EXPORT IN DER SIDEBAR (Jetzt formatiert!) ---
     with st.sidebar:
         st.divider()
         st.subheader("Projekt-Controlling")
         
-        # Daten für Excel aufbereiten
         export_data = []
         for i in items:
             export_data.append({
@@ -70,18 +71,42 @@ if st.session_state.logged_in:
             
         df = pd.DataFrame(export_data)
         
-        # Leere Tabelle abfangen, falls noch keine Mängel existieren
         if df.empty:
             df = pd.DataFrame(columns=["Titel", "Priorität", "Status"])
             
-        # Excel-Datei im Arbeitsspeicher generieren
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Mängelliste')
             
-        # Download-Button
+            # --- EXCEL FORMATIERUNG ---
+            worksheet = writer.sheets['Mängelliste']
+            
+            # 1. Überschriften stylen (Dunkelblau mit weißer Schrift)
+            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True)
+            
+            for col_num, value in enumerate(df.columns.values):
+                cell = worksheet.cell(row=1, column=col_num + 1)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center")
+                
+            # 2. Spaltenbreiten automatisch anpassen
+            for idx, col in enumerate(worksheet.columns, 1):
+                max_length = 0
+                column_letter = get_column_letter(idx)
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = (max_length + 2) # Ein bisschen Puffer
+                # Minimale Breite erzwingen, damit es gut aussieht
+                worksheet.column_dimensions[column_letter].width = max(adjusted_width, 15)
+                
         st.download_button(
-            label="📥 Excel-Matrix herunterladen",
+            label="📥 Formatierte Matrix laden",
             data=buffer.getvalue(),
             file_name="Punchlist_Matrix.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

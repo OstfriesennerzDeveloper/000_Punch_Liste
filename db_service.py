@@ -8,6 +8,37 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 COLLECTION_NAME = 'punchlist_items'
+GEWERKE_COLLECTION = 'gewerke'
+
+def get_gewerke():
+    """Holt alle Kategorien aus der Datenbank."""
+    gewerke = []
+    docs = db.collection(GEWERKE_COLLECTION).stream()
+    for doc in docs:
+        gewerke.append(doc.to_dict().get('name'))
+    
+    if not gewerke:
+        standards = ["Elektro", "IT/Netzwerk", "TGA/Klima", "Trockenbau", "Projektmanagement", "Planungen", "Sonstiges"]
+        for s in standards:
+            add_gewerk(s)
+        return sorted(standards)
+    
+    return sorted(gewerke)
+
+def add_gewerk(name):
+    """Fügt eine neue Kategorie hinzu (und verhindert Duplikate)."""
+    # Erst prüfen, ob es den Namen schon exakt so gibt
+    docs = db.collection(GEWERKE_COLLECTION).where('name', '==', name).stream()
+    vorhanden = any(True for _ in docs)
+    
+    if not vorhanden:
+        db.collection(GEWERKE_COLLECTION).add({'name': name})
+
+def delete_gewerk(name):
+    """Löscht alle Einträge dieser Kategorie aus der Datenbank."""
+    docs = db.collection(GEWERKE_COLLECTION).where('name', '==', name).stream()
+    for doc in docs:
+        doc.reference.delete()
 
 def get_items():
     """Holt alle Mängel aus der Datenbank."""
@@ -17,27 +48,30 @@ def get_items():
         item = doc.to_dict()
         item['id'] = doc.id
         
-        # Rückwärtskompatibilität: Falls alte Einträge keinen Status haben
         if 'status' not in item:
             item['status'] = 'Offen'
+        if 'gewerk' not in item:
+            item['gewerk'] = 'Nicht zugewiesen'
+        if 'datum' not in item:
+            item['datum'] = 'Unbekannt'
             
         items.append(item)
     return items
 
-def add_item(titel, prioritaet):
-    """Fügt einen neuen Mangel mit Standardstatus 'Offen' hinzu."""
+def add_item(titel, prioritaet, gewerk, ziel_datum):
+    """Fügt einen neuen Mangel mit manuell gewähltem Zieldatum hinzu."""
     db.collection(COLLECTION_NAME).add({
         'titel': titel,
         'prioritaet': prioritaet,
-        'status': 'Offen' # <-- NEU: Standardstatus
+        'gewerk': gewerk,
+        'datum': ziel_datum,
+        'status': 'Offen'
     })
 
 def delete_item(item_id):
-    """Löscht einen Mangel endgültig (nur für Admins)."""
     db.collection(COLLECTION_NAME).document(item_id).delete()
 
 def update_status(item_id, neuer_status):
-    """NEU: Aktualisiert den Status eines spezifischen Mangels."""
     db.collection(COLLECTION_NAME).document(item_id).update({
         'status': neuer_status
     })

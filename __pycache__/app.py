@@ -5,11 +5,13 @@ import db_service
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+# --- KONFIGURATION & ZUGANGSDATEN ---
 USERS = {
     "admin": {"password": "admin123", "role": "Admin"},
     "user": {"password": "user123", "role": "User"}
 }
 
+# --- SESSION STATE INITIALISIERUNG ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "role" not in st.session_state:
@@ -18,9 +20,9 @@ if "username" not in st.session_state:
     st.session_state.username = None
 
 st.title("Punchlist & Burndown Tool")
-st.subheader("Issue #5.2: Gewerke-Verwaltung & Kalender")
+st.subheader("Issue #5: Gewerke & Zeitstempel")
 
-# --- SIDEBAR: LOGIN & EINSTELLUNGEN ---
+# --- SIDEBAR: LOGIN / LOGOUT ---
 with st.sidebar:
     st.header("Login-Bereich")
     
@@ -47,41 +49,14 @@ with st.sidebar:
             st.session_state.role = None
             st.session_state.username = None
             st.rerun()
-            
-        # --- EINSTELLUNGEN FÜR GEWERKE (Nur für Admins) ---
-        if st.session_state.role == "Admin":
-            st.divider()
-            with st.expander("⚙️ Gewerke verwalten"):
-                gewerke_liste = db_service.get_gewerke()
-                
-                # 1. Hinzufügen
-                st.write("**Neues Gewerk anlegen:**")
-                neues_gewerk = st.text_input("Neue Kategorie eintragen:")
-                if st.button("Hinzufügen") and neues_gewerk:
-                    if neues_gewerk not in gewerke_liste:
-                        db_service.add_gewerk(neues_gewerk)
-                        st.success(f"'{neues_gewerk}' wurde hinzugefügt!")
-                        st.rerun()
-                    else:
-                        st.warning("Diese Kategorie existiert bereits!")
-                
-                st.divider()
-                
-                # 2. Löschen
-                st.write("**Gewerk löschen:**")
-                gewerk_zum_loeschen = st.selectbox("Kategorie auswählen:", gewerke_liste)
-                if st.button("🗑️ Löschen") and gewerk_zum_loeschen:
-                    db_service.delete_gewerk(gewerk_zum_loeschen)
-                    st.success(f"'{gewerk_zum_loeschen}' wurde gelöscht!")
-                    st.rerun()
 
 # --- HAUPT-APP ---
 if st.session_state.logged_in:
     
+    # DATEN ABRUFEN
     items = db_service.get_items()
-    gewerke_liste = db_service.get_gewerke() # Aktuelle Liste für das Dropdown
     
-    # --- EXCEL-EXPORT ---
+    # --- EXCEL-EXPORT IN DER SIDEBAR ---
     with st.sidebar:
         st.divider()
         st.subheader("Projekt-Controlling")
@@ -93,18 +68,19 @@ if st.session_state.logged_in:
                 "Priorität": i.get('prioritaet', ''),
                 "Gewerk": i.get('gewerk', 'Nicht zugewiesen'),
                 "Status": i.get('status', 'Offen'),
-                "Geplant bis": i.get('datum', 'Unbekannt')
+                "Erstelldatum": i.get('datum', 'Unbekannt')
             })
             
         df = pd.DataFrame(export_data)
         
         if df.empty:
-            df = pd.DataFrame(columns=["Titel", "Priorität", "Gewerk", "Status", "Geplant bis"])
+            df = pd.DataFrame(columns=["Titel", "Priorität", "Gewerk", "Status", "Erstelldatum"])
             
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Mängelliste')
             
+            # --- EXCEL FORMATIERUNG ---
             worksheet = writer.sheets['Mängelliste']
             header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             header_font = Font(color="FFFFFF", bold=True, size=14)
@@ -144,49 +120,46 @@ if st.session_state.logged_in:
     
     st.markdown("### Projekt-Fortschritt")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Gesamt Aufgaben", total_items)
+    col1.metric("Gesamt Mängel", total_items)
     col2.metric("Offen", open_count)
     col3.metric("Erledigt", closed_count)
+    
     st.progress(progress_percent / 100.0, text=f"Burndown: {progress_percent}% erledigt")
     st.divider()
 
-    # --- FORMULAR ---
+    # --- FORMULAR (Erweitert um Gewerk) ---
     with st.form("add_item_form", clear_on_submit=True):
-        titel = st.text_input("Neue Aufgabe / Mangel erfassen")
+        titel = st.text_input("Neuen Mangel erfassen")
         
-        col_form1, col_form2, col_form3 = st.columns(3)
+        # Felder in zwei Spalten nebeneinander
+        col_form1, col_form2 = st.columns(2)
         with col_form1:
             prioritaet = st.selectbox("Priorität", ["Sehr Hoch", "Hoch", "Mittel", "Niedrig", "Sehr Niedrig"])
         with col_form2:
-            # Falls Liste leer, Rückfall auf Standard, um Fehler zu vermeiden
-            sichere_liste = gewerke_liste if gewerke_liste else ["Bitte Gewerk anlegen"]
-            gewerk = st.selectbox("Gewerk", sichere_liste)
-        with col_form3:
-            # NEU: Kalender im Format TT.MM.JJJJ
-            ziel_datum = st.date_input("Geplant bis", format="DD.MM.YYYY")
+            gewerk = st.selectbox("Gewerk", ["Elektro", "IT/Netzwerk", "TGA/Klima", "Trockenbau", "Sonstiges"])
             
-        submitted = st.form_submit_button("Eintragen")
+        submitted = st.form_submit_button("Mangel eintragen")
         
         if submitted and titel:
-            datum_str = ziel_datum.strftime("%d.%m.%Y")
-            db_service.add_item(titel, prioritaet, gewerk, datum_str)
-            st.success("Erfolgreich hinzugefügt!")
+            db_service.add_item(titel, prioritaet, gewerk)
+            st.success("Mangel erfolgreich hinzugefügt!")
             st.rerun()
 
     st.divider()
 
     # --- MÄNGELLISTE MIT TABS ---
-    tab1, tab2 = st.tabs(["📋 Offene Aufgaben", "✅ Erledigt"])
+    tab1, tab2 = st.tabs(["📋 Offene Mängel", "✅ Erledigte Mängel"])
     
     with tab1:
         if not open_items:
-            st.info("Super, keine offenen Aufgaben! 🎉")
+            st.info("Super, keine offenen Mängel! 🎉")
         else:
             for item in open_items:
                 col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
                 with col1:
                     st.write(f"**{item.get('titel', '')}**")
-                    st.caption(f"🔧 {item.get('gewerk', '')} | 🎯 Bis: {item.get('datum', '')}")
+                    # Dezent angezeigtes Gewerk und Datum
+                    st.caption(f"🔧 {item.get('gewerk', '')} | 📅 {item.get('datum', '')}")
                 with col2:
                     st.write(item.get('prioritaet', ''))
                 with col3:
@@ -203,13 +176,13 @@ if st.session_state.logged_in:
 
     with tab2:
         if not closed_items:
-            st.info("Noch keine Aufgaben abgearbeitet.")
+            st.info("Noch keine Mängel abgearbeitet.")
         else:
             for item in closed_items:
                 col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
                 with col1:
                     st.write(f"~~{item.get('titel', '')}~~")
-                    st.caption(f"🔧 {item.get('gewerk', '')} | 🎯 Bis: {item.get('datum', '')}")
+                    st.caption(f"🔧 {item.get('gewerk', '')} | 📅 {item.get('datum', '')}")
                 with col2:
                     st.write(item.get('prioritaet', ''))
                 with col3:
@@ -223,3 +196,6 @@ if st.session_state.logged_in:
                             st.rerun()
                     else:
                         st.write("🔒")
+
+else:
+    st.info("👈 Bitte logge dich in der Seitenleiste ein, um auf das Tool zuzugreifen.")

@@ -43,9 +43,9 @@ with st.sidebar.form("mangel_form", clear_on_submit=True):
             st.rerun()
         else:
             st.warning("Bitte gib mindestens einen Titel ein.")
-
-# Hauptbereich: Liste aller Mängel
-st.header("Aktuelle Mängelliste")
+            
+# Hauptbereich: Dashboard und Liste
+st.header("Projekt-Dashboard")
 
 try:
     items = get_items()
@@ -53,8 +53,26 @@ try:
     if not items:
         st.info("Noch keine Einträge in der Datenbank. Nutze die Sidebar, um einen Mangel hinzuzufügen.")
     else:
+        # --- DASHBOARD METRIKEN ---
+        total_items = len(items)
+        erledigt = sum(1 for i in items if i.get('fortschritt', 0) == 100)
+        offen = total_items - erledigt
+        gesamt_fortschritt = sum(i.get('fortschritt', 0) for i in items) / total_items
+        
+        # Kennzahlen nebeneinander anzeigen
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Gesamtanzahl Mängel", total_items)
+        col2.metric("Offen / In Arbeit", offen)
+        col3.metric("Projektfortschritt", f"{gesamt_fortschritt:.1f} %")
+        
+        # Visueller Fortschrittsbalken für das Gesamtprojekt
+        st.progress(int(gesamt_fortschritt) / 100)
+        st.divider()
+        
+        # --- MÄNGELLISTE ---
+        st.header("Aktuelle Mängelliste")
         for item in items:
-            # Jeder Eintrag als aufklappbare Karte (Expander)
+            # Jeder Eintrag als aufklappbare Karte
             expander_title = f"{item.get('gewerk', 'Allgemein')} | {item.get('titel', 'Ohne Titel')} — Fortschritt: {item.get('fortschritt', 0)}%"
             
             with st.expander(expander_title):

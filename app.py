@@ -56,8 +56,6 @@ if not st.session_state["authenticated"]:
 # --- 2. HAUPTSEITE & PHASEN-AUSWAHL ---
 st.title("Punchlist & Burndown Tool")
 
-# Phasen in der Sidebar steuern
-st.sidebar.header("Projekt-Phasen / Abnahmen")
 existing_phases = get_all_phases()
 
 if "current_phase" not in st.session_state:
@@ -144,7 +142,7 @@ try:
         "🔄 Neue Abnahme / Phase"
     ])
     
-    # --- REITER 1: MÄNGELLISTE (Mit entschärftem Löschen) ---
+    # --- REITER 1: MÄNGELLISTE ---
     with tab_liste:
         st.subheader(f"Mängelliste für: {st.session_state['current_phase']}")
         
@@ -179,13 +177,11 @@ try:
                     new_fortschritt = st.slider("Fortschritt (%)", 0, 100, int(item.get('fortschritt', 0)), key=f"slider_{item['id']}")
                     new_kommentar = st.text_area("Kommentar / Status", value=item.get('kommentar', ''), key=f"kommentar_{item['id']}")
                     
-                    # Speichern-Button
                     if st.button("Änderungen speichern", key=f"btn_save_{item['id']}", use_container_width=True):
                         update_item(item['id'], new_fortschritt, new_kommentar, new_ziel_kw)
                         st.success("Erfolgreich gespeichert!")
                         st.rerun()
                         
-                    # Entschärfter Löschbereich (Versteckt unter einer Checkbox)
                     with st.expander("⚙️ Erweitert / Mangel löschen"):
                         confirm_delete = st.checkbox("Ja, diesen Mangel unwiderruflich löschen", key=f"chk_del_{item['id']}")
                         if confirm_delete:
@@ -218,28 +214,25 @@ try:
                 gewerk_counts = df_dash["gewerk"].value_counts()
                 st.bar_chart(gewerk_counts)
 
-    # --- REITER 3: BURNDOWN-CHART (Mit nachträglich anpassbarem Startdatum) ---
+    # --- REITER 3: BURNDOWN-CHART (Voll flexibel für Vergangenheit & Zukunft) ---
     with tab_chart:
         st.subheader(f"Burndown-Chart: {st.session_state['current_phase']}")
         
         if not items:
             st.info("Keine Daten für das Chart vorhanden.")
         else:
-            # Session-State Schlüssel für den Phasen-Start initialisieren oder verknüpfen
             start_key = f"start_date_{st.session_state['current_phase']}"
             
-            # Frühestes Erstelldatum der Mängel als Voreinstellung ermitteln
             created_dates = [pd.to_datetime(i.get("erstellt_am")).replace(tzinfo=None) for i in items if i.get("erstellt_am")]
             default_start = min(created_dates) if created_dates else datetime.now() - timedelta(days=28)
             
             if start_key not in st.session_state:
                 st.session_state[start_key] = default_start.date()
             
-            # Steuerelement, um das Initialdatum jederzeit zu korrigieren
             col_s1, col_s2 = st.columns(2)
             with col_s1:
                 selected_start_date = st.date_input(
-                    "Initialer Startzeitpunkt (Diagramm-Beginn anpassen):",
+                    "Geplanter Starttermin (Diagramm-Beginn / Plandatum):",
                     value=st.session_state[start_key],
                     key=f"input_{start_key}"
                 )
@@ -253,6 +246,7 @@ try:
             
             resolved_dates = [pd.to_datetime(i.get("erledigt_am")).replace(tzinfo=None) for i in items if i.get("erledigt_am")]
             
+            # Spätestes Ziel-Datum ermitteln
             target_date = start_monday + timedelta(days=28)
             for item in items:
                 zkw = item.get("ziel_kw", "")
@@ -269,53 +263,63 @@ try:
                             except:
                                 pass
             target_monday = target_date - timedelta(days=target_date.weekday())
-            current_monday = now - timedelta(days=now.weekday())
             
+            # Das Ende des Charts wird durch das spätere Datum bestimmt (Zieltermin oder heute)
+            chart_end_date = max(target_monday, now)
+            
+            # Zeitstrahl vom Start-Montag bis zum Chart-Ende aufbauen
             timeline = []
-            ist_values = []
             curr = start_monday
-            
-            while curr <= current_monday:
+            while curr <= chart_end_date + timedelta(days=7):
                 timeline.append(curr)
-                kw_end = curr + timedelta(days=6, hours=23, minutes=59)
-                c_count = sum(1 for d in created_dates if d <= kw_end)
-                r_count = sum(1 for d in resolved_dates if d <= kw_end)
-                ist_values.append(max(0, c_count - r_count))
                 curr += timedelta(days=7)
                 
-            prognose_values = [None] * len(timeline)
-            current_open = ist_values[-1] if ist_values else 0
-            prognose_values[-1] = current_open
+            current_monday = now - timedelta(days=now.weekday())
             
-            weeks_passed = len(ist_values)
-            total_closed = sum(1 for d in resolved_dates if d >= start_date and d <= (current_monday + timedelta(days=6)))
-            velocity = total_closed / weeks_passed if weeks_passed > 0 else 0
-            
-            forecast_curr = current_monday + timedelta(days=7)
-            if current_open > 0 and velocity > 0:
-                forecast_open = current_open - velocity
-                while forecast_open > 0 and len(timeline) < 100:
-                    timeline.append(forecast_curr)
-                    prognose_values.append(forecast_open)
+            # Ist-Linie und Prognose berechnen
+            ist_values = []
+            for t_date in timeline:
+                kw_end = t_date + timedelta(days=6, hours=23, minutes=59)
+                # Wenn das Datum in der Zukunft liegt, zeigen wir für die Ist-Linie keine Realwerte an
+                if t_date > current_monday:
                     ist_values.append(None)
-                    forecast_open -= velocity
-                    forecast_curr += timedelta(days=7)
-                timeline.append(forecast_curr)
-                prognose_values.append(0)
-                ist_values.append(None)
-            elif current_open > 0:
-                for _ in range(4):
-                    timeline.append(forecast_curr)
-                    prognose_values.append(current_open)
-                    ist_values.append(None)
-                    forecast_curr += timedelta(days=7)
+                else:
+                    c_count = sum(1 for d in created_dates if d <= kw_end)
+                    r_count = sum(1 for d in resolved_dates if d <= kw_end)
+                    ist_values.append(max(0, c_count - r_count))
                     
-            while timeline[-1] < target_monday:
-                next_week = timeline[-1] + timedelta(days=7)
-                timeline.append(next_week)
-                ist_values.append(None)
-                prognose_values.append(0 if prognose_values[-1] == 0 else None)
+            prognose_values = [None] * len(timeline)
             
+            # Finde den letzten gültigen Ist-Wert (bis heute)
+            valid_ist_indices = [i for i, val in enumerate(ist_values) if val is not None]
+            if valid_ist_indices:
+                last_valid_idx = valid_ist_indices[-1]
+                current_open = ist_values[last_valid_idx]
+                prognose_values[last_valid_idx] = current_open
+                
+                weeks_passed = len(valid_ist_indices)
+                total_closed = sum(1 for d in resolved_dates if d >= start_date and d <= (current_monday + timedelta(days=6)))
+                velocity = total_closed / weeks_passed if weeks_passed > 0 else 0
+                
+                forecast_curr_idx = last_valid_idx + 1
+                if current_open > 0 and velocity > 0:
+                    forecast_open = current_open - velocity
+                    while forecast_open > 0 and forecast_curr_idx < len(timeline):
+                        prognose_values[forecast_curr_idx] = forecast_open
+                        forecast_open -= velocity
+                        forecast_curr_idx += 1
+                    if forecast_curr_idx < len(timeline):
+                        prognose_values[forecast_curr_idx] = 0
+                elif current_open > 0:
+                    for _ in range(4):
+                        if forecast_curr_idx < len(timeline):
+                            prognose_values[forecast_curr_idx] = current_open
+                            forecast_curr_idx += 1
+            else:
+                velocity = 0
+                current_open = len(items)
+
+            # Soll-Linie aufbauen (Linear vom Start bis zum Ziel-Datum)
             total_items_count = len(items)
             soll_values = []
             target_idx = timeline.index(target_monday) if target_monday in timeline else len(timeline)-1
@@ -329,9 +333,6 @@ try:
                         soll_values.append(0)
                 else:
                     soll_values.append(0)
-                    
-            while len(prognose_values) < len(timeline):
-                prognose_values.append(0 if prognose_values[-1] == 0 else None)
 
             df_chart = pd.DataFrame({
                 "Datum": timeline,
@@ -352,10 +353,12 @@ try:
                 st.line_chart(df_chart[["Soll-Linie (Plan)", "Ist-Linie (Realität)", "Prognose (Trend)"]])
                 
             st.divider()
-            if velocity > 0 and current_open > 0:
-                kw_zero = timeline[-1].isocalendar()[1]
-                jahr_zero = timeline[-1].isocalendar()[0]
-                st.info(f"💡 **Prognose:** Bei einer Velocity von **{velocity:.1f} Mängeln/Woche** ist der Bestand in **KW {kw_zero}/{jahr_zero}** abgearbeitet.")
+            if valid_ist_indices and velocity > 0 and current_open > 0:
+                # Finde den Index, wo die Prognose 0 berührt
+                zero_indices = [i for i, val in enumerate(prognose_values) if val == 0]
+                if zero_indices:
+                    zero_date = timeline[zero_indices[0]]
+                    st.info(f"💡 **Prognose:** Bei einer Velocity von **{velocity:.1f} Mängeln/Woche** wird der Bestand voraussichtlich in **KW {zero_date.isocalendar()[1]}/{zero_date.isocalendar()[0]}** abgearbeitet.")
 
     # --- REITER 4: NEUE ABNAHME / PHASE ---
     with tab_admin:
@@ -365,7 +368,7 @@ try:
         with st.form("new_phase_form"):
             new_phase_name = st.text_input("Name der neuen Phase (z.B. 'Phase 2 - Zwischenabnahme')", value="Phase 2")
             migrate_checkbox = st.checkbox("Alle offenen Mängel (< 100% Fortschritt) aus aktueller Phase mitübernehmen", value=True)
-            new_phase_start = st.date_input("Initialer Starttermin für das neue Diagramm:", value=datetime.now())
+            new_phase_start = st.date_input("Geplanter Starttermin für das neue Diagramm (auch in Zukunft möglich):", value=datetime.now())
             
             create_submitted = st.form_submit_button("Neue Phase starten")
             
@@ -380,7 +383,6 @@ try:
                         )
                     
                     st.session_state["current_phase"] = new_phase_name
-                    # Startdatum im Session-State für die neue Phase direkt setzen
                     st.session_state[f"start_date_{new_phase_name}"] = new_phase_start
                     
                     st.success(f"Erfolgreich in '{new_phase_name}' gewechselt! {migrated_count} offene Mängel wurden übernommen.")
@@ -388,5 +390,5 @@ try:
                 else:
                     st.warning("Bitte gib einen neuen, eindeutigen Namen für die Phase ein.")
 
-except Exception as e:
-    st.error(f"Fehler beim Laden: {e}")
+except Exception as ec:
+    st.error(f"Fehler beim Laden: {ec}")

@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import io
 import base64
+import re
+from datetime import datetime, timedelta
 from PIL import Image
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
@@ -19,29 +21,23 @@ def format_date_with_kw(date_str):
 
 # --- HILFSFUNKTION FÜR BILD-KOMPRIMIERUNG ---
 def process_image(uploaded_file):
-    """Komprimiert das Bild stark, damit die Datenbank schnell bleibt."""
     if uploaded_file is None:
         return None
     image = Image.open(uploaded_file)
-    # Bild verkleinern, falls es sehr groß ist
     image.thumbnail((800, 800))
-    # In RGB umwandeln (wichtig für Apple/iOS Fotos)
     if image.mode != 'RGB':
         image = image.convert('RGB')
-    
     buffer = io.BytesIO()
-    # Als komprimiertes JPEG speichern
     image.save(buffer, format="JPEG", quality=70)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-# --- 1. EINFACHE AUTHENTIFIZIERUNG (MIT ENTER-TASTE) ---
+# --- 1. EINFACHE AUTHENTIFIZIERUNG ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 if not st.session_state["authenticated"]:
     st.title("Login - Punchlist & Burndown Tool")
     
-    # st.form sorgt dafür, dass die Enter-Taste den Login auslöst
     with st.form("login_form"):
         st.info("Standard-Zugang: Benutzername: `admin` | Passwort: `admin123`")
         username = st.text_input("Benutzername")
@@ -69,16 +65,13 @@ with st.sidebar.form("mangel_form", clear_on_submit=True):
     ziel_kw = st.text_input("Avisierte Fertigstellung (z.B. KW 42/2026)")
     beschreibung = st.text_area("Beschreibung")
     
-    # Foto-Upload: Auf dem iPad öffnet sich hier die Option "Foto aufnehmen" oder "Fotomediathek"
     foto_upload = st.file_uploader("📸 Foto hinzufügen (optional)", type=["jpg", "jpeg", "png"])
     
     submitted = st.form_submit_button("Hinzufügen")
     
     if submitted:
         if titel:
-            # Bild komprimieren, falls eines hochgeladen wurde
             foto_b64 = process_image(foto_upload) if foto_upload else None
-            
             add_item(titel, gewerk, beschreibung, ziel_kw, foto_b64)
             st.success("Mangel erfolgreich hinzugefügt!")
             st.rerun()
@@ -137,7 +130,6 @@ try:
     if not items:
         st.info("Noch keine Einträge in der Datenbank. Nutze die Sidebar, um einen Mangel hinzuzufügen.")
     else:
-        # Wir erstellen zwei Reiter (Tabs)
         tab_liste, tab_chart = st.tabs(["📋 Dashboard & Mängelliste", "📈 Burndown-Chart"])
         
         # --- TAB 1: DASHBOARD UND LISTE ---
@@ -171,15 +163,12 @@ try:
                 expander_title = f"{item.get('gewerk', 'Allgemein')} | {item.get('titel', 'Ohne Titel')}{ziel_text} — Fortschritt: {item.get('fortschritt', 0)}%"
                 
                 with st.expander(expander_title):
-                    
-                    # Layout für Beschreibung und Foto nebeneinander
                     col_text, col_foto = st.columns([2, 1])
                     
                     with col_text:
                         st.write(f"**Beschreibung:** {item.get('beschreibung', '-')}")
                     
                     with col_foto:
-                        # Falls ein Bild existiert, anzeigen
                         if item.get("foto_b64"):
                             st.image(base64.b64decode(item["foto_b64"]), use_column_width=True)
                     
@@ -216,31 +205,40 @@ try:
                             delete_item(item['id'])
                             st.rerun()
 
-        # --- TAB 2: BURNDOWN CHART ---
+        # --- TAB 2: SOLL/IST BURNDOWN CHART (KW-Basiert) ---
         with tab_chart:
-            st.subheader("Burndown-Chart (Offene Mängel über die Zeit)")
-            burndown_data = []
+            st.subheader("Soll- vs. Ist-Kurve (Offene Mängel nach Kalenderwochen)")
+            
+            # 1. Start- und Enddatum ermitteln
+            erstellt_dates = [pd.to_datetime(i["erstellt_am"]).replace(tzinfo=None) for i in items if i.get("erstellt_am")]
+            start_date = min(erstellt_dates) if erstellt_dates else datetime.now()
+            
+            end_date = datetime.now()
             for item in items:
-                if item.get("erstellt_am"):
-                    burndown_data.append({"Datum": item["erstellt_am"], "Änderung": 1})
-                if item.get("erledigt_am"):
-                    burndown_data.append({"Datum": item["erledigt_am"], "Änderung": -1})
-                    
-            if burndown_data:
-                df = pd.DataFrame(burndown_data)
-                df["Datum"] = pd.to_datetime(df["Datum"])
-                df_grouped = df.groupby("Datum")["Änderung"].sum().reset_index()
-                df_grouped = df_grouped.sort_values("Datum")
-                df_grouped["Offene Mängel"] = df_grouped["Änderung"].cumsum()
+                zkw = item.get("ziel_kw", "")
+                if zkw:
+                    # Versucht Formate wie "KW 42/2026" oder "42/26" intelligent zu lesen
+                    m = re.search(r'(\d{1,2})(?:.*?(\d{4}))?', str(zkw))
+                    if m:
+                        w = int(m.group(1))
+                        y = int(m.group(2)) if m.group(2) else datetime.now().year
+                        if 1 <= w <= 53:
+                            try:
+                                dt = datetime.strptime(f"{y}-W{w:02d}-1", "%G-W%V-%u")
+                                if dt > end_date:
+                                    end_date = dt
+                            except:
+                                pass
+            
+            # Puffer geben, falls Start und Ende zu nah beieinander liegen
+            if (end_date - start_date).days < 14:
+                end_date = start_date + timedelta(days=28)
                 
-                wochentage = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
-                df_grouped["Datum_formatiert"] = df_grouped["Datum"].apply(
-                    lambda x: f"{wochentage[x.weekday()]}, {x.strftime('%d.%m.')} (KW {x.isocalendar()[1]})"
-                )
-                df_grouped = df_grouped.set_index("Datum_formatiert")
-                st.line_chart(df_grouped[["Offene Mängel"]])
-            else:
-                st.info("Noch nicht genug zeitliche Daten für ein Burndown-Chart vorhanden.")
-
-except Exception as e:
-    st.error(f"Fehler beim Laden der Einträge: {e}")
+            # 2. Zeitstrahl in Wochen (Montage) aufbauen
+            start_monday = start_date - timedelta(days=start_date.weekday())
+            end_monday = end_date - timedelta(days=end_date.weekday())
+            
+            timeline = []
+            current = start_monday
+            while current <= end_monday:
+                timeline.append(current)

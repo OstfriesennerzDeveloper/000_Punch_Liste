@@ -19,7 +19,6 @@ def format_date_with_kw(date_str):
     kw = dt.isocalendar()[1]
     return f"{dt.strftime('%d.%m.%Y')} (KW {kw})"
 
-# --- HILFSFUNKTION FÜR BILD-KOMPRIMIERUNG ---
 def process_image(uploaded_file):
     if uploaded_file is None:
         return None
@@ -123,14 +122,14 @@ try:
 except Exception as e:
     st.sidebar.error(f"Export momentan nicht möglich: {e}")
 
-# --- 5. HAUPTBEREICH: TABS FÜR MEHR ÜBERSICHT ---
+# --- 5. HAUPTBEREICH: TABS ---
 try:
     items = get_items()
     
     if not items:
         st.info("Noch keine Einträge in der Datenbank. Nutze die Sidebar, um einen Mangel hinzuzufügen.")
     else:
-        tab_liste, tab_chart = st.tabs(["📋 Dashboard & Mängelliste", "📈 Burndown-Chart"])
+        tab_liste, tab_chart = st.tabs(["📋 Dashboard & Mängelliste", "📈 Profi Burndown-Chart"])
         
         # --- TAB 1: DASHBOARD UND LISTE ---
         with tab_liste:
@@ -155,143 +154,162 @@ try:
             else:
                 anzeige_items = [i for i in items if i.get("gewerk") == selected_filter]
                 
-            if not anzeige_items:
-                st.info(f"Keine Mängel für das Gewerk '{selected_filter}' gefunden.")
-                
             for item in anzeige_items:
                 ziel_text = f" | Ziel: {item.get('ziel_kw')}" if item.get('ziel_kw') else ""
                 expander_title = f"{item.get('gewerk', 'Allgemein')} | {item.get('titel', 'Ohne Titel')}{ziel_text} — Fortschritt: {item.get('fortschritt', 0)}%"
                 
                 with st.expander(expander_title):
                     col_text, col_foto = st.columns([2, 1])
-                    
                     with col_text:
                         st.write(f"**Beschreibung:** {item.get('beschreibung', '-')}")
-                    
                     with col_foto:
                         if item.get("foto_b64"):
                             st.image(base64.b64decode(item["foto_b64"]), use_column_width=True)
-                    
                     st.divider()
-                    
-                    new_ziel_kw = st.text_input(
-                        "Avisierte Fertigstellung (z.B. KW 42/2026)", 
-                        value=item.get('ziel_kw', ''), 
-                        key=f"ziel_{item['id']}"
-                    )
-                    
-                    new_fortschritt = st.slider(
-                        "Fortschritt (%)", 
-                        0, 100, 
-                        int(item.get('fortschritt', 0)), 
-                        key=f"slider_{item['id']}"
-                    )
-                    new_kommentar = st.text_area(
-                        "Kommentar / Status", 
-                        value=item.get('kommentar', ''), 
-                        key=f"kommentar_{item['id']}"
-                    )
-                    
+                    new_ziel_kw = st.text_input("Avisierte Fertigstellung (z.B. KW 42/2026)", value=item.get('ziel_kw', ''), key=f"ziel_{item['id']}")
+                    new_fortschritt = st.slider("Fortschritt (%)", 0, 100, int(item.get('fortschritt', 0)), key=f"slider_{item['id']}")
+                    new_kommentar = st.text_area("Kommentar / Status", value=item.get('kommentar', ''), key=f"kommentar_{item['id']}")
                     col_save, col_delete = st.columns(2)
-                    
                     with col_save:
                         if st.button("Änderungen speichern", key=f"btn_save_{item['id']}", use_container_width=True):
                             update_item(item['id'], new_fortschritt, new_kommentar, new_ziel_kw)
                             st.success("Erfolgreich gespeichert!")
                             st.rerun()
-                            
                     with col_delete:
                         if st.button("🗑️ Löschen", key=f"btn_del_{item['id']}", type="secondary", use_container_width=True):
                             delete_item(item['id'])
                             st.rerun()
 
-        # --- TAB 2: SOLL/IST BURNDOWN CHART (KW-Basiert) ---
+        # --- TAB 2: PROFI BURNDOWN CHART (SOLL, IST, PROGNOSE) ---
         with tab_chart:
-            st.subheader("Soll- vs. Ist-Kurve (Offene Mängel nach Kalenderwochen)")
+            st.subheader("Punchlist Burndown (Mängelabbau-Diagramm)")
+            st.markdown("**🟢 Soll-Linie (Plan)** | **🔵 Ist-Linie (Realität)** | **🟠 Prognose (Velocity-Trend)**")
             
-            # 1. Start- und Enddatum ermitteln
-            erstellt_dates = [pd.to_datetime(i["erstellt_am"]).replace(tzinfo=None) for i in items if i.get("erstellt_am")]
-            start_date = min(erstellt_dates) if erstellt_dates else datetime.now()
+            now = datetime.now()
             
-            end_date = datetime.now()
+            # 1. Daten und Zeitstrahl vorbereiten
+            created_dates = [pd.to_datetime(i.get("erstellt_am")).replace(tzinfo=None) for i in items if i.get("erstellt_am")]
+            resolved_dates = [pd.to_datetime(i.get("erledigt_am")).replace(tzinfo=None) for i in items if i.get("erledigt_am")]
+            
+            start_date = min(created_dates) if created_dates else now
+            start_monday = start_date - timedelta(days=start_date.weekday())
+            
+            # Spätestes Ziel-Datum ermitteln
+            target_date = start_monday + timedelta(days=28) # Standard-Puffer
             for item in items:
                 zkw = item.get("ziel_kw", "")
                 if zkw:
-                    # Versucht Formate wie "KW 42/2026" oder "42/26" intelligent zu lesen
                     m = re.search(r'(\d{1,2})(?:.*?(\d{4}))?', str(zkw))
                     if m:
                         w = int(m.group(1))
-                        y = int(m.group(2)) if m.group(2) else datetime.now().year
+                        y = int(m.group(2)) if m.group(2) else now.year
                         if 1 <= w <= 53:
                             try:
                                 dt = datetime.strptime(f"{y}-W{w:02d}-1", "%G-W%V-%u")
-                                if dt > end_date:
-                                    end_date = dt
+                                if dt > target_date:
+                                    target_date = dt
                             except:
                                 pass
+            target_monday = target_date - timedelta(days=target_date.weekday())
+            current_monday = now - timedelta(days=now.weekday())
             
-            # Puffer geben, falls Start und Ende zu nah beieinander liegen
-            if (end_date - start_date).days < 14:
-                end_date = start_date + timedelta(days=28)
-                
-            # 2. Zeitstrahl in Wochen (Montage) aufbauen
-            start_monday = start_date - timedelta(days=start_date.weekday())
-            end_monday = end_date - timedelta(days=end_date.weekday())
-            
+            # 2. Reale Ist-Kurve aufbauen
             timeline = []
-            current = start_monday
-            while current <= end_monday:
-                timeline.append(current)
-                current += timedelta(days=7)
-                
-            df_chart = pd.DataFrame({"Datum": timeline})
-            df_chart["KW"] = df_chart["Datum"].apply(lambda x: f"KW {x.isocalendar()[1]}/{x.isocalendar()[0]}")
-            
-            # 3. Soll-Kurve berechnen (Linear von Gesamtanzahl auf 0)
-            total_scope = len(items)
-            steps = len(df_chart)
-            soll_values = []
-            if steps > 1:
-                for i in range(steps):
-                    soll_values.append(total_scope - (total_scope * i / (steps - 1)))
-            else:
-                soll_values = [total_scope]
-            df_chart["Soll-Kurve"] = soll_values
-            
-            # 4. Ist-Kurve berechnen
-            now_unaware = datetime.now()
             ist_values = []
+            curr = start_monday
             
-            for step_date in df_chart["Datum"]:
-                end_of_kw = step_date + timedelta(days=6, hours=23, minutes=59)
+            while curr <= current_monday:
+                timeline.append(curr)
+                kw_end = curr + timedelta(days=6, hours=23, minutes=59)
+                c_count = sum(1 for d in created_dates if d <= kw_end)
+                r_count = sum(1 for d in resolved_dates if d <= kw_end)
+                ist_values.append(c_count - r_count)
+                curr += timedelta(days=7)
                 
-                # Zukünftige Wochen bleiben leer -> Linie bricht sauber ab
-                if step_date > now_unaware:
+            # 3. Prognose (Forecast) berechnen
+            prognose_values = [None] * len(timeline)
+            current_open = ist_values[-1] if ist_values else 0
+            prognose_values[-1] = current_open # Prognose dockt nahtlos an aktueller Ist-Linie an
+            
+            weeks_passed = len(ist_values)
+            total_closed = sum(1 for d in resolved_dates if d <= (current_monday + timedelta(days=6)))
+            velocity = total_closed / weeks_passed if weeks_passed > 0 else 0 # Mängel pro Woche
+            
+            forecast_curr = current_monday + timedelta(days=7)
+            if current_open > 0 and velocity > 0:
+                forecast_open = current_open - velocity
+                while forecast_open > 0 and len(timeline) < 100: # Schutz vor Endlosschleife
+                    timeline.append(forecast_curr)
+                    prognose_values.append(forecast_open)
                     ist_values.append(None)
-                    continue
+                    forecast_open -= velocity
+                    forecast_curr += timedelta(days=7)
+                # Null-Linie berühren
+                timeline.append(forecast_curr)
+                prognose_values.append(0)
+                ist_values.append(None)
+            elif current_open > 0:
+                # Keine Velocity (noch nichts geschlossen) -> Stagnierende Prognose für 4 Wochen
+                for _ in range(4):
+                    timeline.append(forecast_curr)
+                    prognose_values.append(current_open)
+                    ist_values.append(None)
+                    forecast_curr += timedelta(days=7)
                     
-                created_count = sum(1 for d in erstellt_dates if d <= end_of_kw)
-                
-                erledigt_dates = [pd.to_datetime(i["erledigt_am"]).replace(tzinfo=None) for i in items if i.get("erledigt_am")]
-                completed_count = sum(1 for d in erledigt_dates if d <= end_of_kw)
-                
-                open_issues = created_count - completed_count
-                ist_values.append(open_issues)
+            # 4. Soll-Kurve aufbauen (Ideallinie zum Zieldatum)
+            # Timeline ggf. bis zum Ziel-Datum verlängern
+            while timeline[-1] < target_monday:
+                next_week = timeline[-1] + timedelta(days=7)
+                timeline.append(next_week)
+                ist_values.append(None)
+                prognose_values.append(0 if prognose_values[-1] == 0 else None)
             
-            df_chart["Ist-Kurve"] = ist_values
+            total_items_count = len(items)
+            soll_values = []
+            target_idx = timeline.index(target_monday) if target_monday in timeline else len(timeline)-1
             
-            # 5. Chart zeichnen
+            for i, t in enumerate(timeline):
+                if i <= target_idx:
+                    if target_idx > 0:
+                        val = total_items_count - (total_items_count * i / target_idx)
+                        soll_values.append(max(0, val))
+                    else:
+                        soll_values.append(0)
+                else:
+                    soll_values.append(0)
+                    
+            # Fehlende Prognose-Werte mit 0 auffüllen, damit der Array gleich lang bleibt
+            while len(prognose_values) < len(timeline):
+                prognose_values.append(0 if prognose_values[-1] == 0 else None)
+
+            # 5. Zusammenbau & Rendering
+            df_chart = pd.DataFrame({
+                "Datum": timeline,
+                "Soll-Linie (Plan)": soll_values,
+                "Ist-Linie (Realität)": ist_values,
+                "Prognose (Trend)": prognose_values
+            })
+            
+            df_chart["KW"] = df_chart["Datum"].apply(lambda x: f"KW {x.isocalendar()[1]}/{str(x.isocalendar()[0])[-2:]}")
             df_chart = df_chart.set_index("KW")
             
             try:
-                # Nutzt Blau für Soll, Rot/Orange für Ist
+                # Nutzt die Streamlit-Farbpalette für klare Unterscheidung
                 st.line_chart(
-                    df_chart[["Soll-Kurve", "Ist-Kurve"]],
-                    color=["#0000FF", "#FF0000"] 
+                    df_chart[["Soll-Linie (Plan)", "Ist-Linie (Realität)", "Prognose (Trend)"]],
+                    color=["#2ca02c", "#1f77b4", "#ff7f0e"] # Grün, Blau, Orange
                 )
             except:
-                # Fallback für ältere Streamlit-Versionen
-                st.line_chart(df_chart[["Soll-Kurve", "Ist-Kurve"]])
+                st.line_chart(df_chart[["Soll-Linie (Plan)", "Ist-Linie (Realität)", "Prognose (Trend)"]])
+                
+            # Automatische Analyse / Textausgabe
+            st.divider()
+            if velocity > 0 and current_open > 0:
+                kw_zero = timeline[-1].isocalendar()[1]
+                jahr_zero = timeline[-1].isocalendar()[0]
+                st.info(f"💡 **Projektanalyse:** Bei der aktuellen Abarbeitungsgeschwindigkeit von durchschnittlich **{velocity:.1f} Mängeln pro Woche** wird der Bestand voraussichtlich in **KW {kw_zero}/{jahr_zero}** auf null sinken.")
+            elif current_open > 0 and velocity == 0:
+                st.warning("⚠️ **Achtung:** Es wurden bisher keine Mängel final geschlossen (Velocity = 0). Eine Prognose des Fertigstellungstermins ist aktuell nicht möglich.")
 
 except Exception as e:
     st.error(f"Fehler beim Laden der Einträge: {e}")

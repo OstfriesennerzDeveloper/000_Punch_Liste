@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 from db_service import db, get_items, add_item, update_item, get_gewerke
 
 st.set_page_config(page_title="Punchlist & Burndown Tool", layout="wide")
@@ -68,7 +69,42 @@ try:
         # Visueller Fortschrittsbalken für das Gesamtprojekt
         st.progress(int(gesamt_fortschritt) / 100)
         st.divider()
+        # --- BURNDOWN CHART ---
+        st.subheader("Burndown-Chart (Offene Mängel über die Zeit)")
         
+        burndown_data = []
+        for item in items:
+            # Erstellung erhöht die offenen Mängel um +1
+            if item.get("erstellt_am"):
+                burndown_data.append({"Datum": item["erstellt_am"], "Änderung": 1})
+            
+            # Erledigung (100%) senkt die offenen Mängel um -1
+            if item.get("erledigt_am"):
+                burndown_data.append({"Datum": item["erledigt_am"], "Änderung": -1})
+                
+        if burndown_data:
+            # Daten in einen Pandas DataFrame umwandeln
+            df = pd.DataFrame(burndown_data)
+            
+            # Text-Zeitstempel in echte Datumsobjekte umwandeln (ohne Uhrzeit, nur der Tag)
+            df["Datum"] = pd.to_datetime(df["Datum"]).dt.date
+            
+            # Nach Datum zusammenfassen und Änderungen summieren
+            df_grouped = df.groupby("Datum")["Änderung"].sum().reset_index()
+            df_grouped = df_grouped.sort_values("Datum")
+            
+            # Laufende Summe berechnen (wie viele Mängel waren an diesem Tag insgesamt offen?)
+            df_grouped["Offene Mängel"] = df_grouped["Änderung"].cumsum()
+            
+            # Datum als X-Achse festlegen
+            df_grouped = df_grouped.set_index("Datum")
+            
+            # Streamlit Liniendiagramm zeichnen
+            st.line_chart(df_grouped[["Offene Mängel"]])
+        else:
+            st.info("Noch nicht genug zeitliche Daten für ein Burndown-Chart vorhanden. Erstelle oder erledige einen Mangel.")
+            
+        st.divider()
         # --- MÄNGELLISTE ---
         st.header("Aktuelle Mängelliste")
         for item in items:

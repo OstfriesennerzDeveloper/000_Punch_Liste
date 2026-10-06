@@ -58,10 +58,11 @@ st.title("Punchlist & Burndown Tool")
 
 existing_phases = get_all_phases()
 
-if "current_phase" not in st.session_state:
+if "current_phase" not in st.session_state or st.session_state["current_phase"] not in existing_phases:
     st.session_state["current_phase"] = existing_phases[0]
 
-selected_phase = st.sidebar.selectbox("Aktive Phase / Abnahme:", existing_phases, index=existing_phases.index(st.session_state["current_phase"]))
+phase_index = existing_phases.index(st.session_state["current_phase"])
+selected_phase = st.sidebar.selectbox("Aktive Phase / Abnahme:", existing_phases, index=phase_index)
 if selected_phase != st.session_state["current_phase"]:
     st.session_state["current_phase"] = selected_phase
     st.rerun()
@@ -214,7 +215,7 @@ try:
                 gewerk_counts = df_dash["gewerk"].value_counts()
                 st.bar_chart(gewerk_counts)
 
-    # --- REITER 3: BURNDOWN-CHART (Voll flexibel für Vergangenheit & Zukunft) ---
+    # --- REITER 3: BURNDOWN-CHART ---
     with tab_chart:
         st.subheader(f"Burndown-Chart: {st.session_state['current_phase']}")
         
@@ -246,7 +247,6 @@ try:
             
             resolved_dates = [pd.to_datetime(i.get("erledigt_am")).replace(tzinfo=None) for i in items if i.get("erledigt_am")]
             
-            # Spätestes Ziel-Datum ermitteln
             target_date = start_monday + timedelta(days=28)
             for item in items:
                 zkw = item.get("ziel_kw", "")
@@ -264,10 +264,8 @@ try:
                                 pass
             target_monday = target_date - timedelta(days=target_date.weekday())
             
-            # Das Ende des Charts wird durch das spätere Datum bestimmt (Zieltermin oder heute)
             chart_end_date = max(target_monday, now)
             
-            # Zeitstrahl vom Start-Montag bis zum Chart-Ende aufbauen
             timeline = []
             curr = start_monday
             while curr <= chart_end_date + timedelta(days=7):
@@ -276,11 +274,9 @@ try:
                 
             current_monday = now - timedelta(days=now.weekday())
             
-            # Ist-Linie und Prognose berechnen
             ist_values = []
             for t_date in timeline:
                 kw_end = t_date + timedelta(days=6, hours=23, minutes=59)
-                # Wenn das Datum in der Zukunft liegt, zeigen wir für die Ist-Linie keine Realwerte an
                 if t_date > current_monday:
                     ist_values.append(None)
                 else:
@@ -290,7 +286,6 @@ try:
                     
             prognose_values = [None] * len(timeline)
             
-            # Finde den letzten gültigen Ist-Wert (bis heute)
             valid_ist_indices = [i for i, val in enumerate(ist_values) if val is not None]
             if valid_ist_indices:
                 last_valid_idx = valid_ist_indices[-1]
@@ -319,7 +314,6 @@ try:
                 velocity = 0
                 current_open = len(items)
 
-            # Soll-Linie aufbauen (Linear vom Start bis zum Ziel-Datum)
             total_items_count = len(items)
             soll_values = []
             target_idx = timeline.index(target_monday) if target_monday in timeline else len(timeline)-1
@@ -354,7 +348,6 @@ try:
                 
             st.divider()
             if valid_ist_indices and velocity > 0 and current_open > 0:
-                # Finde den Index, wo die Prognose 0 berührt
                 zero_indices = [i for i, val in enumerate(prognose_values) if val == 0]
                 if zero_indices:
                     zero_date = timeline[zero_indices[0]]

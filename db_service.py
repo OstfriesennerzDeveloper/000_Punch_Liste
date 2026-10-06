@@ -36,10 +36,11 @@ def get_gewerke():
     """Gibt die Liste der Gewerke für Dropdowns zurück."""
     return ["Elektrotechnik", "Leittechnik", "Trockenbau", "Brandschutz", "Klima/Lüftung", "Sonstiges"]
 
-def get_items():
-    """Lädt alle Einträge aus der Datenbank."""
+def get_items(phase="Phase 1"):
+    """Lädt alle Einträge aus der Datenbank für die aktuelle Phase."""
     maengel_ref = db.collection("maengel")
-    docs = maengel_ref.stream()
+    # Wir filtern nach der aktiven Projektphase
+    docs = maengel_ref.where("phase", "==", phase).stream()
     
     items_liste = []
     for doc in docs:
@@ -49,15 +50,25 @@ def get_items():
         
     return items_liste
 
-def add_item(titel, gewerk, beschreibung, ziel_kw, foto_b64=None):
-    """Speichert einen neuen Eintrag inkl. Foto-String in Firebase."""
+def get_all_phases():
+    """Gibt alle existierenden Phasen zurück."""
+    docs = db.collection("maengel").stream()
+    phases = set()
+    for doc in docs:
+        p = doc.to_dict().get("phase", "Phase 1")
+        phases.add(p)
+    return sorted(list(phases)) if phases else ["Phase 1"]
+
+def add_item(titel, gewerk, beschreibung, ziel_kw, foto_b64=None, phase="Phase 1"):
+    """Speichert einen neuen Eintrag inkl. Phase."""
     maengel_ref = db.collection("maengel")
     maengel_ref.add({
         "titel": titel,
         "gewerk": gewerk,
         "beschreibung": beschreibung,
         "ziel_kw": ziel_kw, 
-        "foto_b64": foto_b64, # Neues Feld für das Foto
+        "foto_b64": foto_b64,
+        "phase": phase,
         "fortschritt": 0,
         "kommentar": "",
         "erstellt_am": datetime.now().isoformat(),
@@ -84,3 +95,27 @@ def update_item(doc_id, fortschritt, kommentar, ziel_kw):
 def delete_item(doc_id):
     """Löscht einen Eintrag dauerhaft aus Firebase."""
     db.collection("maengel").document(doc_id).delete()
+
+def migrate_open_items(old_phase, new_phase, custom_start_date=None):
+    """Kopiert alle noch nicht erledigten Mängel (< 100%) in eine neue Phase."""
+    old_items = get_items(phase=old_phase)
+    creation_time = custom_start_date.isoformat() if custom_start_date else datetime.now().isoformat()
+    
+    count = 0
+    for item in old_items:
+        if item.get("fortschritt", 0) < 100:
+            maengel_ref = db.collection("maengel")
+            maengel_ref.add({
+                "titel": item.get("titel"),
+                "gewerk": item.get("gewerk"),
+                "beschreibung": f"[Übernommen aus {old_phase}] {item.get('beschreibung', '')}",
+                "ziel_kw": item.get("ziel_kw"),
+                "foto_b64": item.get("foto_b64"),
+                "phase": new_phase,
+                "fortschritt": 0,
+                "kommentar": f"Restmangel aus vorheriger Abnahme.",
+                "erstellt_am": creation_time,
+                "erledigt_am": None
+            })
+            count += 1
+    return count

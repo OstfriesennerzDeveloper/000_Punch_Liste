@@ -7,11 +7,14 @@ from datetime import datetime, timedelta
 from PIL import Image
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
-from db_service import db, get_items, add_item, update_item, get_gewerke, delete_item
+from db_service import (
+    db, get_items, add_item, update_item, get_gewerke, 
+    delete_item, get_all_phases, migrate_open_items
+)
 
 st.set_page_config(page_title="Punchlist & Burndown Tool", layout="wide")
 
-# --- HILFSFUNKTION FÜR DATUM + KW ---
+# --- HILFSFUNKTIONEN ---
 def format_date_with_kw(date_str):
     if not date_str or pd.isna(date_str):
         return ""
@@ -30,19 +33,17 @@ def process_image(uploaded_file):
     image.save(buffer, format="JPEG", quality=70)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-# --- 1. EINFACHE AUTHENTIFIZIERUNG ---
+# --- 1. AUTHENTIFIZIERUNG ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 if not st.session_state["authenticated"]:
     st.title("Login - Punchlist & Burndown Tool")
-    
     with st.form("login_form"):
         st.info("Standard-Zugang: Benutzername: `admin` | Passwort: `admin123`")
         username = st.text_input("Benutzername")
         password = st.text_input("Passwort", type="password")
         submitted = st.form_submit_button("Einloggen")
-        
         if submitted:
             if username == "admin" and password == "admin123":
                 st.session_state["authenticated"] = True
@@ -52,26 +53,39 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 
-# --- 2. HAUPTSEITE ---
+# --- 2. HAUPTSEITE & PHASEN-AUSWAHL ---
 st.title("Punchlist & Burndown Tool")
 
+# Phasen in der Sidebar steuern
+st.sidebar.header("Projekt-Phasen / Abnahmen")
+existing_phases = get_all_phases()
+
+if "current_phase" not in st.session_state:
+    st.session_state["current_phase"] = existing_phases[0]
+
+# Phase per Dropdown in der Sidebar wechseln
+selected_phase = st.sidebar.selectbox("Aktive Phase / Abnahme:", existing_phases, index=existing_phases.index(st.session_state["current_phase"]))
+if selected_phase != st.session_state["current_phase"]:
+    st.session_state["current_phase"] = selected_phase
+    st.rerun()
+
+st.sidebar.divider()
+
 # --- 3. SIDEBAR: NEUER MANGEL ---
-st.sidebar.header("Neuen Mangel erfassen")
+st.sidebar.header(f"Neuen Mangel erfassen ({st.session_state['current_phase']})")
 
 with st.sidebar.form("mangel_form", clear_on_submit=True):
     titel = st.text_input("Titel / Bauteil")
     gewerk = st.selectbox("Gewerk", get_gewerke())
     ziel_kw = st.text_input("Avisierte Fertigstellung (z.B. KW 42/2026)")
     beschreibung = st.text_area("Beschreibung")
-    
     foto_upload = st.file_uploader("📸 Foto hinzufügen (optional)", type=["jpg", "jpeg", "png"])
     
     submitted = st.form_submit_button("Hinzufügen")
-    
     if submitted:
         if titel:
             foto_b64 = process_image(foto_upload) if foto_upload else None
-            add_item(titel, gewerk, beschreibung, ziel_kw, foto_b64)
+            add_item(titel, gewerk, beschreibung, ziel_kw, foto_b64, phase=st.session_state["current_phase"])
             st.success("Mangel erfolgreich hinzugefügt!")
             st.rerun()
         else:
@@ -82,7 +96,7 @@ st.sidebar.divider()
 st.sidebar.header("Daten-Export")
 
 try:
-    export_items = get_items()
+    export_items = get_items(phase=st.session_state["current_phase"])
     if export_items:
         df_export = pd.DataFrame(export_items)
         if not df_export.empty:
@@ -98,9 +112,8 @@ try:
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_export.to_excel(writer, index=False, sheet_name="Mängelliste")
-                worksheet = writer.sheets["Mängelliste"]
-                
+                df_export.to_excel(writer, index=False, sheet_name="Maengelliste")
+                worksheet = writer.sheets["Maengelliste"]
                 for idx, col_name in enumerate(df_export.columns):
                     col_letter = get_column_letter(idx + 1)
                     max_len = len(str(col_name))
@@ -108,7 +121,6 @@ try:
                         if val:
                             max_len = max(max_len, len(str(val)))
                     worksheet.column_dimensions[col_letter].width = min(max_len + 2, 50)
-                
                 for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
                     for cell in row:
                         cell.alignment = Alignment(wrap_text=True, vertical='top')
@@ -116,44 +128,42 @@ try:
             st.sidebar.download_button(
                 label="📥 Excel-Liste herunterladen",
                 data=buffer.getvalue(),
-                file_name="Punchliste_Export.xlsx",
+                file_name=f"Punchliste_{st.session_state['current_phase']}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 except Exception as e:
-    st.sidebar.error(f"Export momentan nicht möglich: {e}")
+    st.sidebar.error(f"Export nicht möglich: {e}")
 
-# --- 5. HAUPTBEREICH: TABS ---
+# --- 5. HAUPTBEREICH: REITER-STRUKTUR ---
 try:
-    items = get_items()
+    items = get_items(phase=st.session_state["current_phase"])
     
-    if not items:
-        st.info("Noch keine Einträge in der Datenbank. Nutze die Sidebar, um einen Mangel hinzuzufügen.")
-    else:
-        tab_liste, tab_chart = st.tabs(["📋 Dashboard & Mängelliste", "📈 Profi Burndown-Chart"])
+    # 4 Hauptreiter für maximale Übersicht und Profi-Funktionen
+    tab_liste, tab_dash, tab_chart, tab_admin = st.tabs([
+        "📋 Mängelliste", 
+        "📊 Dashboard", 
+        "📈 Burndown-Chart", 
+        "🔄 Neue Abnahme / Phase"
+    ])
+    
+    # --- REITER 1: MÄNGELLISTE (VIEL PLATZ FÜR >100 EINTRÄGE) ---
+    with tab_liste:
+        st.subheader(f"Mängelliste für: {st.session_state['current_phase']}")
         
-        # --- TAB 1: DASHBOARD UND LISTE ---
-        with tab_liste:
-            total_items = len(items)
-            erledigt = sum(1 for i in items if i.get('fortschritt', 0) == 100)
-            offen = total_items - erledigt
-            gesamt_fortschritt = sum(i.get('fortschritt', 0) for i in items) / total_items if total_items > 0 else 0
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Gesamtanzahl Mängel", total_items)
-            col2.metric("Offen / In Arbeit", offen)
-            col3.metric("Projektfortschritt", f"{gesamt_fortschritt:.1f} %")
-            
-            st.progress(int(gesamt_fortschritt) / 100)
-            st.divider()
-            
+        if not items:
+            st.info("Noch keine Mängel in dieser Phase erfasst.")
+        else:
             alle_gewerke = ["Alle anzeigen"] + get_gewerke()
-            selected_filter = st.selectbox("Nach Gewerk filtern:", alle_gewerke)
+            selected_filter = st.selectbox("Nach Gewerk filtern:", alle_gewerke, key="filter_gewerk")
             
             if selected_filter == "Alle anzeigen":
                 anzeige_items = items
             else:
                 anzeige_items = [i for i in items if i.get("gewerk") == selected_filter]
                 
+            st.write(f"Anzahl Mängel in Ansicht: **{len(anzeige_items)}**")
+            st.divider()
+            
             for item in anzeige_items:
                 ziel_text = f" | Ziel: {item.get('ziel_kw')}" if item.get('ziel_kw') else ""
                 expander_title = f"{item.get('gewerk', 'Allgemein')} | {item.get('titel', 'Ohne Titel')}{ziel_text} — Fortschritt: {item.get('fortschritt', 0)}%"
@@ -180,22 +190,56 @@ try:
                             delete_item(item['id'])
                             st.rerun()
 
-        # --- TAB 2: PROFI BURNDOWN CHART (SOLL, IST, PROGNOSE) ---
-        with tab_chart:
-            st.subheader("Punchlist Burndown (Mängelabbau-Diagramm)")
-            st.markdown("**🟢 Soll-Linie (Plan)** | **🔵 Ist-Linie (Realität)** | **🟠 Prognose (Velocity-Trend)**")
+    # --- REITER 2: DASHBOARD (KENNZAHLEN AUSGELAGERT) ---
+    with tab_dash:
+        st.subheader(f"Projekt-Dashboard: {st.session_state['current_phase']}")
+        if not items:
+            st.info("Keine Daten für das Dashboard vorhanden.")
+        else:
+            total_items = len(items)
+            erledigt = sum(1 for i in items if i.get('fortschritt', 0) == 100)
+            offen = total_items - erledigt
+            gesamt_fortschritt = sum(i.get('fortschritt', 0) for i in items) / total_items if total_items > 0 else 0
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Gesamtanzahl Mängel", total_items)
+            col2.metric("Offen / In Arbeit", offen)
+            col3.metric("Projektfortschritt", f"{gesamt_fortschritt:.1f} %")
+            
+            st.progress(int(gesamt_fortschritt) / 100)
+            st.divider()
+            
+            # Verteilung nach Gewerken
+            st.markdown("### Verteilung nach Gewerken")
+            df_dash = pd.DataFrame(items)
+            if "gewerk" in df_dash.columns:
+                gewerk_counts = df_dash["gewerk"].value_counts()
+                st.bar_chart(gewerk_counts)
+
+    # --- REITER 3: BURNDOWN-CHART (MIT FREI WÄHLBAREM INITIALSTART) ---
+    with tab_chart:
+        st.subheader(f"Burndown-Chart: {st.session_state['current_phase']}")
+        
+        if not items:
+            st.info("Keine Daten für das Chart vorhanden.")
+        else:
+            # Einstellung für den Initialstartpunkt
+            col_s1, col_s2 = st.columns(2)
+            with col_s1:
+                custom_start_date = st.date_input(
+                    "Initialer Startzeitpunkt (Diagramm-Beginn):",
+                    value=datetime.now() - timedelta(days=28)
+                )
             
             now = datetime.now()
+            start_date = datetime.combine(custom_start_date, datetime.min.time())
+            start_monday = start_date - timedelta(days=start_date.weekday())
             
-            # 1. Daten und Zeitstrahl vorbereiten
             created_dates = [pd.to_datetime(i.get("erstellt_am")).replace(tzinfo=None) for i in items if i.get("erstellt_am")]
             resolved_dates = [pd.to_datetime(i.get("erledigt_am")).replace(tzinfo=None) for i in items if i.get("erledigt_am")]
             
-            start_date = min(created_dates) if created_dates else now
-            start_monday = start_date - timedelta(days=start_date.weekday())
-            
             # Spätestes Ziel-Datum ermitteln
-            target_date = start_monday + timedelta(days=28) # Standard-Puffer
+            target_date = start_monday + timedelta(days=28)
             for item in items:
                 zkw = item.get("ziel_kw", "")
                 if zkw:
@@ -213,7 +257,7 @@ try:
             target_monday = target_date - timedelta(days=target_date.weekday())
             current_monday = now - timedelta(days=now.weekday())
             
-            # 2. Reale Ist-Kurve aufbauen
+            # Ist-Kurve ab Initialstartpunkt aufbauen
             timeline = []
             ist_values = []
             curr = start_monday
@@ -223,41 +267,37 @@ try:
                 kw_end = curr + timedelta(days=6, hours=23, minutes=59)
                 c_count = sum(1 for d in created_dates if d <= kw_end)
                 r_count = sum(1 for d in resolved_dates if d <= kw_end)
-                ist_values.append(c_count - r_count)
+                ist_values.append(max(0, c_count - r_count))
                 curr += timedelta(days=7)
                 
-            # 3. Prognose (Forecast) berechnen
+            # Prognose
             prognose_values = [None] * len(timeline)
             current_open = ist_values[-1] if ist_values else 0
-            prognose_values[-1] = current_open # Prognose dockt nahtlos an aktueller Ist-Linie an
+            prognose_values[-1] = current_open
             
             weeks_passed = len(ist_values)
-            total_closed = sum(1 for d in resolved_dates if d <= (current_monday + timedelta(days=6)))
-            velocity = total_closed / weeks_passed if weeks_passed > 0 else 0 # Mängel pro Woche
+            total_closed = sum(1 for d in resolved_dates if d >= start_date and d <= (current_monday + timedelta(days=6)))
+            velocity = total_closed / weeks_passed if weeks_passed > 0 else 0
             
             forecast_curr = current_monday + timedelta(days=7)
             if current_open > 0 and velocity > 0:
                 forecast_open = current_open - velocity
-                while forecast_open > 0 and len(timeline) < 100: # Schutz vor Endlosschleife
+                while forecast_open > 0 and len(timeline) < 100:
                     timeline.append(forecast_curr)
                     prognose_values.append(forecast_open)
                     ist_values.append(None)
                     forecast_open -= velocity
                     forecast_curr += timedelta(days=7)
-                # Null-Linie berühren
                 timeline.append(forecast_curr)
                 prognose_values.append(0)
                 ist_values.append(None)
             elif current_open > 0:
-                # Keine Velocity (noch nichts geschlossen) -> Stagnierende Prognose für 4 Wochen
                 for _ in range(4):
                     timeline.append(forecast_curr)
                     prognose_values.append(current_open)
                     ist_values.append(None)
                     forecast_curr += timedelta(days=7)
                     
-            # 4. Soll-Kurve aufbauen (Ideallinie zum Zieldatum)
-            # Timeline ggf. bis zum Ziel-Datum verlängern
             while timeline[-1] < target_monday:
                 next_week = timeline[-1] + timedelta(days=7)
                 timeline.append(next_week)
@@ -278,11 +318,9 @@ try:
                 else:
                     soll_values.append(0)
                     
-            # Fehlende Prognose-Werte mit 0 auffüllen, damit der Array gleich lang bleibt
             while len(prognose_values) < len(timeline):
                 prognose_values.append(0 if prognose_values[-1] == 0 else None)
 
-            # 5. Zusammenbau & Rendering
             df_chart = pd.DataFrame({
                 "Datum": timeline,
                 "Soll-Linie (Plan)": soll_values,
@@ -294,22 +332,46 @@ try:
             df_chart = df_chart.set_index("KW")
             
             try:
-                # Nutzt die Streamlit-Farbpalette für klare Unterscheidung
                 st.line_chart(
                     df_chart[["Soll-Linie (Plan)", "Ist-Linie (Realität)", "Prognose (Trend)"]],
-                    color=["#2ca02c", "#1f77b4", "#ff7f0e"] # Grün, Blau, Orange
+                    color=["#2ca02c", "#1f77b4", "#ff7f0e"]
                 )
             except:
                 st.line_chart(df_chart[["Soll-Linie (Plan)", "Ist-Linie (Realität)", "Prognose (Trend)"]])
                 
-            # Automatische Analyse / Textausgabe
             st.divider()
             if velocity > 0 and current_open > 0:
                 kw_zero = timeline[-1].isocalendar()[1]
                 jahr_zero = timeline[-1].isocalendar()[0]
-                st.info(f"💡 **Projektanalyse:** Bei der aktuellen Abarbeitungsgeschwindigkeit von durchschnittlich **{velocity:.1f} Mängeln pro Woche** wird der Bestand voraussichtlich in **KW {kw_zero}/{jahr_zero}** auf null sinken.")
-            elif current_open > 0 and velocity == 0:
-                st.warning("⚠️ **Achtung:** Es wurden bisher keine Mängel final geschlossen (Velocity = 0). Eine Prognose des Fertigstellungstermins ist aktuell nicht möglich.")
+                st.info(f"💡 **Prognose:** Bei einer Velocity von **{velocity:.1f} Mängeln/Woche** ist der Bestand in **KW {kw_zero}/{jahr_zero}** abgearbeitet.")
+
+    # --- REITER 4: NEUE ABNAHME / PHASE & ALTLASTEN-ÜBERNAHME ---
+    with tab_admin:
+        st.subheader("🔄 Neue Projektphase / Abnahmetermin anlegen")
+        st.write("Erstelle hier einen neuen Abnahme-Zyklus. Du kannst wählen, ob alle aktuell noch **offenen Mängel** aus der bisherigen Phase automatisch als Restmängel in die neue Phase übernommen werden sollen.")
+        
+        with st.form("new_phase_form"):
+            new_phase_name = st.text_input("Name der neuen Phase (z.B. 'Phase 2 - Zwischenabnahme')", value="Phase 2")
+            migrate_checkbox = st.checkbox("Alle offenen Mängel (< 100% Fortschritt) aus aktueller Phase mitübernehmen", value=True)
+            new_phase_start = st.date_input("Initialer Starttermin für das neue Diagramm:", value=datetime.now())
+            
+            create_submitted = st.form_submit_button("Neue Phase starten")
+            
+            if create_submitted:
+                if new_phase_name and new_phase_name not in existing_phases:
+                    migrated_count = 0
+                    if migrate_checkbox:
+                        migrated_count = migrate_open_items(
+                            old_phase=st.session_state["current_phase"],
+                            new_phase=new_phase_name,
+                            custom_start_date=datetime.combine(new_phase_start, datetime.min.time())
+                        )
+                    
+                    st.session_state["current_phase"] = new_phase_name
+                    st.success(f"Erfolgreich in '{new_phase_name}' gewechselt! {migrated_count} offene Mängel wurden übernommen.")
+                    st.rerun()
+                else:
+                    st.warning("Bitte gib einen neuen, eindeutigen Namen für die Phase ein.")
 
 except Exception as e:
-    st.error(f"Fehler beim Laden der Einträge: {e}")
+    st.error(f"Fehler beim Laden: {e}")

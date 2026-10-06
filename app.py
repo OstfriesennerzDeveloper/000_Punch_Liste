@@ -242,3 +242,56 @@ try:
             current = start_monday
             while current <= end_monday:
                 timeline.append(current)
+                current += timedelta(days=7)
+                
+            df_chart = pd.DataFrame({"Datum": timeline})
+            df_chart["KW"] = df_chart["Datum"].apply(lambda x: f"KW {x.isocalendar()[1]}/{x.isocalendar()[0]}")
+            
+            # 3. Soll-Kurve berechnen (Linear von Gesamtanzahl auf 0)
+            total_scope = len(items)
+            steps = len(df_chart)
+            soll_values = []
+            if steps > 1:
+                for i in range(steps):
+                    soll_values.append(total_scope - (total_scope * i / (steps - 1)))
+            else:
+                soll_values = [total_scope]
+            df_chart["Soll-Kurve"] = soll_values
+            
+            # 4. Ist-Kurve berechnen
+            now_unaware = datetime.now()
+            ist_values = []
+            
+            for step_date in df_chart["Datum"]:
+                end_of_kw = step_date + timedelta(days=6, hours=23, minutes=59)
+                
+                # Zukünftige Wochen bleiben leer -> Linie bricht sauber ab
+                if step_date > now_unaware:
+                    ist_values.append(None)
+                    continue
+                    
+                created_count = sum(1 for d in erstellt_dates if d <= end_of_kw)
+                
+                erledigt_dates = [pd.to_datetime(i["erledigt_am"]).replace(tzinfo=None) for i in items if i.get("erledigt_am")]
+                completed_count = sum(1 for d in erledigt_dates if d <= end_of_kw)
+                
+                open_issues = created_count - completed_count
+                ist_values.append(open_issues)
+            
+            df_chart["Ist-Kurve"] = ist_values
+            
+            # 5. Chart zeichnen
+            df_chart = df_chart.set_index("KW")
+            
+            try:
+                # Nutzt Blau für Soll, Rot/Orange für Ist
+                st.line_chart(
+                    df_chart[["Soll-Kurve", "Ist-Kurve"]],
+                    color=["#0000FF", "#FF0000"] 
+                )
+            except:
+                # Fallback für ältere Streamlit-Versionen
+                st.line_chart(df_chart[["Soll-Kurve", "Ist-Kurve"]])
+
+except Exception as e:
+    st.error(f"Fehler beim Laden der Einträge: {e}")

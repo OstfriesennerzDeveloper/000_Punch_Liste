@@ -66,6 +66,10 @@ try:
             df_export = df_export[["titel", "gewerk", "beschreibung", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]]
             df_export.columns = ["Mangel / Bauteil", "Gewerk", "Beschreibung", "Fortschritt (%)", "Kommentar / Status", "Erstellt am", "Erledigt am"]
             
+            # Datumsformat auf Deutsch (TT.MM.JJJJ) anpassen und Uhrzeit entfernen
+            for col in ["Erstellt am", "Erledigt am"]:
+                df_export[col] = pd.to_datetime(df_export[col], errors='coerce').dt.strftime('%d.%m.%Y').fillna('')
+            
             # Excel-Datei im Hintergrund erstellen und formatieren
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -84,7 +88,7 @@ try:
                         if val:
                             max_len = max(max_len, len(str(val)))
                     
-                    # Spaltenbreite auf maximal 50 begrenzen (für lange Beschreibungen)
+                    # Spaltenbreite auf maximal 50 begrenzen
                     optimal_width = min(max_len + 2, 50)
                     worksheet.column_dimensions[col_letter].width = optimal_width
                 

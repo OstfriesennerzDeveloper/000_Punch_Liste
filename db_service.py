@@ -78,3 +78,7 @@ def update_item(doc_id, fortschritt, kommentar):
         update_data["erledigt_am"] = None 
         
     doc_ref.update(update_data)
+
+def delete_item(doc_id):
+    """Löscht einen Eintrag dauerhaft aus Firebase."""
+    db.collection("maengel").document(doc_id).delete()

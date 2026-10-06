@@ -3,7 +3,7 @@ import pandas as pd
 import io
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
-from db_service import db, get_items, add_item, update_item, get_gewerke
+from db_service import db, get_items, add_item, update_item, get_gewerke, delete_item
 
 st.set_page_config(page_title="Punchlist & Burndown Tool", layout="wide")
 
@@ -57,47 +57,33 @@ try:
     if export_items:
         df_export = pd.DataFrame(export_items)
         if not df_export.empty:
-            # Sicherheitshalber prüfen, ob alte Einträge alle Spalten haben
             for col in ["titel", "gewerk", "beschreibung", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]:
                 if col not in df_export.columns:
                     df_export[col] = None
                     
-            # Spalten auswählen und auf Deutsch umbenennen
             df_export = df_export[["titel", "gewerk", "beschreibung", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]]
             df_export.columns = ["Mangel / Bauteil", "Gewerk", "Beschreibung", "Fortschritt (%)", "Kommentar / Status", "Erstellt am", "Erledigt am"]
             
-            # Datumsformat auf Deutsch (TT.MM.JJJJ) anpassen und Uhrzeit entfernen
             for col in ["Erstellt am", "Erledigt am"]:
                 df_export[col] = pd.to_datetime(df_export[col], errors='coerce').dt.strftime('%d.%m.%Y').fillna('')
             
-            # Excel-Datei im Hintergrund erstellen und formatieren
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 df_export.to_excel(writer, index=False, sheet_name="Mängelliste")
-                
-                # Formatierung anwenden
                 worksheet = writer.sheets["Mängelliste"]
                 
-                # 1. Spaltenbreiten optimieren
                 for idx, col_name in enumerate(df_export.columns):
                     col_letter = get_column_letter(idx + 1)
-                    
-                    # Längsten Text in der Spalte finden
                     max_len = len(str(col_name))
                     for val in df_export[col_name]:
                         if val:
                             max_len = max(max_len, len(str(val)))
-                    
-                    # Spaltenbreite auf maximal 50 begrenzen
-                    optimal_width = min(max_len + 2, 50)
-                    worksheet.column_dimensions[col_letter].width = optimal_width
+                    worksheet.column_dimensions[col_letter].width = min(max_len + 2, 50)
                 
-                # 2. Textumbruch und vertikale Ausrichtung für automatische Zeilenhöhe
                 for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
                     for cell in row:
                         cell.alignment = Alignment(wrap_text=True, vertical='top')
             
-            # Download-Button anzeigen
             st.sidebar.download_button(
                 label="📥 Excel-Liste herunterladen",
                 data=buffer.getvalue(),
@@ -116,25 +102,22 @@ try:
     if not items:
         st.info("Noch keine Einträge in der Datenbank. Nutze die Sidebar, um einen Mangel hinzuzufügen.")
     else:
-        # --- DASHBOARD METRIKEN ---
+        # Metriken
         total_items = len(items)
         erledigt = sum(1 for i in items if i.get('fortschritt', 0) == 100)
         offen = total_items - erledigt
         gesamt_fortschritt = sum(i.get('fortschritt', 0) for i in items) / total_items if total_items > 0 else 0
         
-        # Kennzahlen nebeneinander anzeigen
         col1, col2, col3 = st.columns(3)
         col1.metric("Gesamtanzahl Mängel", total_items)
         col2.metric("Offen / In Arbeit", offen)
         col3.metric("Projektfortschritt", f"{gesamt_fortschritt:.1f} %")
         
-        # Visueller Fortschrittsbalken
         st.progress(int(gesamt_fortschritt) / 100)
         st.divider()
         
-        # --- BURNDOWN CHART ---
+        # Burndown Chart
         st.subheader("Burndown-Chart (Offene Mängel über die Zeit)")
-        
         burndown_data = []
         for item in items:
             if item.get("erstellt_am"):
@@ -149,7 +132,6 @@ try:
             df_grouped = df_grouped.sort_values("Datum")
             df_grouped["Offene Mängel"] = df_grouped["Änderung"].cumsum()
             
-            # Wochentage übersetzen
             wochentage = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
             df_grouped["Datum_formatiert"] = df_grouped["Datum"].apply(
                 lambda x: f"{wochentage[x.weekday()]}, {x.strftime('%d.%m.')}"
@@ -161,9 +143,23 @@ try:
             
         st.divider()
         
-        # --- MÄNGELLISTE ---
+        # --- MÄNGELLISTE MIT FILTER ---
         st.header("Aktuelle Mängelliste")
-        for item in items:
+        
+        # Filter Dropdown
+        alle_gewerke = ["Alle anzeigen"] + get_gewerke()
+        selected_filter = st.selectbox("Nach Gewerk filtern:", alle_gewerke)
+        
+        # Liste filtern
+        if selected_filter == "Alle anzeigen":
+            anzeige_items = items
+        else:
+            anzeige_items = [i for i in items if i.get("gewerk") == selected_filter]
+            
+        if not anzeige_items:
+            st.info(f"Keine Mängel für das Gewerk '{selected_filter}' gefunden.")
+            
+        for item in anzeige_items:
             expander_title = f"{item.get('gewerk', 'Allgemein')} | {item.get('titel', 'Ohne Titel')} — Fortschritt: {item.get('fortschritt', 0)}%"
             
             with st.expander(expander_title):
@@ -181,10 +177,19 @@ try:
                     key=f"kommentar_{item['id']}"
                 )
                 
-                if st.button("Änderungen speichern", key=f"btn_{item['id']}"):
-                    update_item(item['id'], new_fortschritt, new_kommentar)
-                    st.success("Änderungen erfolgreich gespeichert!")
-                    st.rerun()
+                # Buttons nebeneinander anordnen
+                col_save, col_delete = st.columns(2)
+                
+                with col_save:
+                    if st.button("Änderungen speichern", key=f"btn_save_{item['id']}", use_container_width=True):
+                        update_item(item['id'], new_fortschritt, new_kommentar)
+                        st.success("Erfolgreich gespeichert!")
+                        st.rerun()
+                        
+                with col_delete:
+                    if st.button("🗑️ Löschen", key=f"btn_del_{item['id']}", type="secondary", use_container_width=True):
+                        delete_item(item['id'])
+                        st.rerun()
 
 except Exception as e:
     st.error(f"Fehler beim Laden der Einträge: {e}")

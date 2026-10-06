@@ -1,6 +1,7 @@
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
+from datetime import datetime
 
 # --- 1. DATENBANK-VERBINDUNG MIT LOKALEM FALLBACK ---
 @st.cache_resource
@@ -48,20 +49,32 @@ def get_items():
     return items_liste
 
 def add_item(titel, gewerk, beschreibung):
-    """Speichert einen neuen Eintrag in Firebase."""
+    """Speichert einen neuen Eintrag mit Erstelldatum in Firebase."""
     maengel_ref = db.collection("maengel")
     maengel_ref.add({
         "titel": titel,
         "gewerk": gewerk,
         "beschreibung": beschreibung,
         "fortschritt": 0,
-        "kommentar": ""
+        "kommentar": "",
+        "erstellt_am": datetime.now().isoformat(), # Neuer Zeitstempel
+        "erledigt_am": None
     })
 
 def update_item(doc_id, fortschritt, kommentar):
-    """Aktualisiert einen bestehenden Eintrag."""
+    """Aktualisiert einen Eintrag und setzt das Erledigt-Datum bei 100%."""
     doc_ref = db.collection("maengel").document(doc_id)
-    doc_ref.update({
+    
+    update_data = {
         "fortschritt": fortschritt,
         "kommentar": kommentar
-    })
+    }
+    
+    # Automatischen Zeitstempel setzen, wenn auf 100% geschoben wird
+    if fortschritt == 100:
+        update_data["erledigt_am"] = datetime.now().isoformat()
+    else:
+        # Falls ein Mangel wieder auf unter 100% gesetzt wird
+        update_data["erledigt_am"] = None 
+        
+    doc_ref.update(update_data)

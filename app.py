@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import io
 from db_service import db, get_items, add_item, update_item, get_gewerke
 
 st.set_page_config(page_title="Punchlist & Burndown Tool", layout="wide")
@@ -32,6 +33,36 @@ st.write("Verwaltung und Nachverfolgung von Mängeln und Projektfortschritten.")
 st.sidebar.header("Neuen Mangel erfassen")
 
 with st.sidebar.form("mangel_form", clear_on_submit=True):
+    # --- EXCEL EXPORT (in der Sidebar) ---
+st.sidebar.divider()
+st.sidebar.header("Daten-Export")
+
+try:
+    export_items = get_items()
+    if export_items:
+        # Daten in einen Pandas DataFrame laden
+        df_export = pd.DataFrame(export_items)
+        
+        # Spalten aufräumen und auf Deutsch benennen
+        if not df_export.empty:
+            # Wir wählen nur die relevanten Spalten aus (ohne die interne ID)
+            df_export = df_export[["titel", "gewerk", "beschreibung", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]]
+            df_export.columns = ["Mangel / Bauteil", "Gewerk", "Beschreibung", "Fortschritt (%)", "Kommentar / Status", "Erstellt am", "Erledigt am"]
+            
+            # Excel-Datei im Arbeitsspeicher (Buffer) erstellen
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_export.to_excel(writer, index=False, sheet_name="Mängelliste")
+            
+            # Download-Button anzeigen
+            st.sidebar.download_button(
+                label="📥 Excel-Liste herunterladen",
+                data=buffer.getvalue(),
+                file_name="Punchliste_Export.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+except Exception as e:
+    st.sidebar.error("Export momentan nicht möglich.")
     titel = st.text_input("Titel / Bauteil")
     gewerk = st.selectbox("Gewerk", get_gewerke())
     beschreibung = st.text_area("Beschreibung")

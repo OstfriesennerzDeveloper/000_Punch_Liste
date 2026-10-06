@@ -49,35 +49,34 @@ def get_items():
         
     return items_liste
 
-def add_item(titel, gewerk, beschreibung, ziel_kw):
-    """Speichert einen neuen Eintrag mit Erstelldatum und Ziel-KW in Firebase."""
+def add_item(titel, gewerk, beschreibung, ziel_kw, foto_b64=None):
+    """Speichert einen neuen Eintrag inkl. Foto-String in Firebase."""
     maengel_ref = db.collection("maengel")
     maengel_ref.add({
         "titel": titel,
         "gewerk": gewerk,
         "beschreibung": beschreibung,
-        "ziel_kw": ziel_kw, # Neues Feld
+        "ziel_kw": ziel_kw, 
+        "foto_b64": foto_b64, # Neues Feld für das Foto
         "fortschritt": 0,
         "kommentar": "",
-        "erstellt_am": datetime.now().isoformat(), # Neuer Zeitstempel
+        "erstellt_am": datetime.now().isoformat(),
         "erledigt_am": None
     })
 
 def update_item(doc_id, fortschritt, kommentar, ziel_kw):
-    """Aktualisiert einen Eintrag, inkl. Ziel-KW und setzt das Erledigt-Datum bei 100%."""
+    """Aktualisiert einen Eintrag."""
     doc_ref = db.collection("maengel").document(doc_id)
     
     update_data = {
         "fortschritt": fortschritt,
         "kommentar": kommentar,
-        "ziel_kw": ziel_kw # Neues Feld
+        "ziel_kw": ziel_kw
     }
     
-    # Automatischen Zeitstempel setzen, wenn auf 100% geschoben wird
     if fortschritt == 100:
         update_data["erledigt_am"] = datetime.now().isoformat()
     else:
-        # Falls ein Mangel wieder auf unter 100% gesetzt wird
         update_data["erledigt_am"] = None 
         
     doc_ref.update(update_data)

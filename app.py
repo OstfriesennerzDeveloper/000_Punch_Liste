@@ -69,10 +69,8 @@ try:
         # Visueller Fortschrittsbalken für das Gesamtprojekt
         st.progress(int(gesamt_fortschritt) / 100)
         st.divider()
-        # --- BURNDOWN CHART ---
-        st.subheader("Burndown-Chart (Offene Mängel über die Zeit)")
         
-# --- BURNDOWN CHART ---
+        # --- BURNDOWN CHART ---
         st.subheader("Burndown-Chart (Offene Mängel über die Zeit)")
         
         burndown_data = []
@@ -85,7 +83,6 @@ try:
             if item.get("erledigt_am"):
                 burndown_data.append({"Datum": item["erledigt_am"], "Änderung": -1})
                 
-        # WICHTIG: Die Einrückung geht hier wieder nach links!
         if burndown_data:
             # Daten in einen Pandas DataFrame umwandeln
             df = pd.DataFrame(burndown_data)
@@ -114,7 +111,8 @@ try:
         else:
             st.info("Noch nicht genug zeitliche Daten für ein Burndown-Chart vorhanden. Erstelle oder erledige einen Mangel.")
             
-        st.divider()        st.divider()
+        st.divider()
+        
         # --- MÄNGELLISTE ---
         st.header("Aktuelle Mängelliste")
         for item in items:

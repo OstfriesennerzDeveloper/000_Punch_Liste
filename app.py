@@ -63,7 +63,6 @@ existing_phases = get_all_phases()
 if "current_phase" not in st.session_state:
     st.session_state["current_phase"] = existing_phases[0]
 
-# Phase per Dropdown in der Sidebar wechseln
 selected_phase = st.sidebar.selectbox("Aktive Phase / Abnahme:", existing_phases, index=existing_phases.index(st.session_state["current_phase"]))
 if selected_phase != st.session_state["current_phase"]:
     st.session_state["current_phase"] = selected_phase
@@ -138,7 +137,6 @@ except Exception as e:
 try:
     items = get_items(phase=st.session_state["current_phase"])
     
-    # 4 Hauptreiter für maximale Übersicht und Profi-Funktionen
     tab_liste, tab_dash, tab_chart, tab_admin = st.tabs([
         "📋 Mängelliste", 
         "📊 Dashboard", 
@@ -146,7 +144,7 @@ try:
         "🔄 Neue Abnahme / Phase"
     ])
     
-    # --- REITER 1: MÄNGELLISTE (VIEL PLATZ FÜR >100 EINTRÄGE) ---
+    # --- REITER 1: MÄNGELLISTE (Mit entschärftem Löschen) ---
     with tab_liste:
         st.subheader(f"Mängelliste für: {st.session_state['current_phase']}")
         
@@ -176,21 +174,26 @@ try:
                         if item.get("foto_b64"):
                             st.image(base64.b64decode(item["foto_b64"]), use_column_width=True)
                     st.divider()
+                    
                     new_ziel_kw = st.text_input("Avisierte Fertigstellung (z.B. KW 42/2026)", value=item.get('ziel_kw', ''), key=f"ziel_{item['id']}")
                     new_fortschritt = st.slider("Fortschritt (%)", 0, 100, int(item.get('fortschritt', 0)), key=f"slider_{item['id']}")
                     new_kommentar = st.text_area("Kommentar / Status", value=item.get('kommentar', ''), key=f"kommentar_{item['id']}")
-                    col_save, col_delete = st.columns(2)
-                    with col_save:
-                        if st.button("Änderungen speichern", key=f"btn_save_{item['id']}", use_container_width=True):
-                            update_item(item['id'], new_fortschritt, new_kommentar, new_ziel_kw)
-                            st.success("Erfolgreich gespeichert!")
-                            st.rerun()
-                    with col_delete:
-                        if st.button("🗑️ Löschen", key=f"btn_del_{item['id']}", type="secondary", use_container_width=True):
-                            delete_item(item['id'])
-                            st.rerun()
+                    
+                    # Speichern-Button
+                    if st.button("Änderungen speichern", key=f"btn_save_{item['id']}", use_container_width=True):
+                        update_item(item['id'], new_fortschritt, new_kommentar, new_ziel_kw)
+                        st.success("Erfolgreich gespeichert!")
+                        st.rerun()
+                        
+                    # Entschärfter Löschbereich (Versteckt unter einer Checkbox)
+                    with st.expander("⚙️ Erweitert / Mangel löschen"):
+                        confirm_delete = st.checkbox("Ja, diesen Mangel unwiderruflich löschen", key=f"chk_del_{item['id']}")
+                        if confirm_delete:
+                            if st.button("🗑️ Endgültig löschen", key=f"btn_del_{item['id']}", type="primary"):
+                                delete_item(item['id'])
+                                st.rerun()
 
-    # --- REITER 2: DASHBOARD (KENNZAHLEN AUSGELAGERT) ---
+    # --- REITER 2: DASHBOARD ---
     with tab_dash:
         st.subheader(f"Projekt-Dashboard: {st.session_state['current_phase']}")
         if not items:
@@ -209,36 +212,47 @@ try:
             st.progress(int(gesamt_fortschritt) / 100)
             st.divider()
             
-            # Verteilung nach Gewerken
             st.markdown("### Verteilung nach Gewerken")
             df_dash = pd.DataFrame(items)
             if "gewerk" in df_dash.columns:
                 gewerk_counts = df_dash["gewerk"].value_counts()
                 st.bar_chart(gewerk_counts)
 
-    # --- REITER 3: BURNDOWN-CHART (MIT FREI WÄHLBAREM INITIALSTART) ---
+    # --- REITER 3: BURNDOWN-CHART (Mit nachträglich anpassbarem Startdatum) ---
     with tab_chart:
         st.subheader(f"Burndown-Chart: {st.session_state['current_phase']}")
         
         if not items:
             st.info("Keine Daten für das Chart vorhanden.")
         else:
-            # Einstellung für den Initialstartpunkt
+            # Session-State Schlüssel für den Phasen-Start initialisieren oder verknüpfen
+            start_key = f"start_date_{st.session_state['current_phase']}"
+            
+            # Frühestes Erstelldatum der Mängel als Voreinstellung ermitteln
+            created_dates = [pd.to_datetime(i.get("erstellt_am")).replace(tzinfo=None) for i in items if i.get("erstellt_am")]
+            default_start = min(created_dates) if created_dates else datetime.now() - timedelta(days=28)
+            
+            if start_key not in st.session_state:
+                st.session_state[start_key] = default_start.date()
+            
+            # Steuerelement, um das Initialdatum jederzeit zu korrigieren
             col_s1, col_s2 = st.columns(2)
             with col_s1:
-                custom_start_date = st.date_input(
-                    "Initialer Startzeitpunkt (Diagramm-Beginn):",
-                    value=datetime.now() - timedelta(days=28)
+                selected_start_date = st.date_input(
+                    "Initialer Startzeitpunkt (Diagramm-Beginn anpassen):",
+                    value=st.session_state[start_key],
+                    key=f"input_{start_key}"
                 )
-            
+                if selected_start_date != st.session_state[start_key]:
+                    st.session_state[start_key] = selected_start_date
+                    st.rerun()
+
             now = datetime.now()
-            start_date = datetime.combine(custom_start_date, datetime.min.time())
+            start_date = datetime.combine(st.session_state[start_key], datetime.min.time())
             start_monday = start_date - timedelta(days=start_date.weekday())
             
-            created_dates = [pd.to_datetime(i.get("erstellt_am")).replace(tzinfo=None) for i in items if i.get("erstellt_am")]
             resolved_dates = [pd.to_datetime(i.get("erledigt_am")).replace(tzinfo=None) for i in items if i.get("erledigt_am")]
             
-            # Spätestes Ziel-Datum ermitteln
             target_date = start_monday + timedelta(days=28)
             for item in items:
                 zkw = item.get("ziel_kw", "")
@@ -257,7 +271,6 @@ try:
             target_monday = target_date - timedelta(days=target_date.weekday())
             current_monday = now - timedelta(days=now.weekday())
             
-            # Ist-Kurve ab Initialstartpunkt aufbauen
             timeline = []
             ist_values = []
             curr = start_monday
@@ -270,7 +283,6 @@ try:
                 ist_values.append(max(0, c_count - r_count))
                 curr += timedelta(days=7)
                 
-            # Prognose
             prognose_values = [None] * len(timeline)
             current_open = ist_values[-1] if ist_values else 0
             prognose_values[-1] = current_open
@@ -345,7 +357,7 @@ try:
                 jahr_zero = timeline[-1].isocalendar()[0]
                 st.info(f"💡 **Prognose:** Bei einer Velocity von **{velocity:.1f} Mängeln/Woche** ist der Bestand in **KW {kw_zero}/{jahr_zero}** abgearbeitet.")
 
-    # --- REITER 4: NEUE ABNAHME / PHASE & ALTLASTEN-ÜBERNAHME ---
+    # --- REITER 4: NEUE ABNAHME / PHASE ---
     with tab_admin:
         st.subheader("🔄 Neue Projektphase / Abnahmetermin anlegen")
         st.write("Erstelle hier einen neuen Abnahme-Zyklus. Du kannst wählen, ob alle aktuell noch **offenen Mängel** aus der bisherigen Phase automatisch als Restmängel in die neue Phase übernommen werden sollen.")
@@ -368,6 +380,9 @@ try:
                         )
                     
                     st.session_state["current_phase"] = new_phase_name
+                    # Startdatum im Session-State für die neue Phase direkt setzen
+                    st.session_state[f"start_date_{new_phase_name}"] = new_phase_start
+                    
                     st.success(f"Erfolgreich in '{new_phase_name}' gewechselt! {migrated_count} offene Mängel wurden übernommen.")
                     st.rerun()
                 else:

@@ -81,29 +81,38 @@ try:
             # Erledigung (100%) senkt die offenen Mängel um -1
             if item.get("erledigt_am"):
                 burndown_data.append({"Datum": item["erledigt_am"], "Änderung": -1})
-                
-        if burndown_data:
             # Daten in einen Pandas DataFrame umwandeln
             df = pd.DataFrame(burndown_data)
             
-            # Text-Zeitstempel in echte Datumsobjekte umwandeln (ohne Uhrzeit, nur der Tag)
-            df["Datum"] = pd.to_datetime(df["Datum"]).dt.date
+            # Text-Zeitstempel in echtes Datetime-Format umwandeln
+            df["Datum"] = pd.to_datetime(df["Datum"])
             
             # Nach Datum zusammenfassen und Änderungen summieren
             df_grouped = df.groupby("Datum")["Änderung"].sum().reset_index()
             df_grouped = df_grouped.sort_values("Datum")
             
-            # Laufende Summe berechnen (wie viele Mängel waren an diesem Tag insgesamt offen?)
+            # Laufende Summe berechnen
             df_grouped["Offene Mängel"] = df_grouped["Änderung"].cumsum()
             
-            # Datum als X-Achse festlegen
-            df_grouped = df_grouped.set_index("Datum")
+            # Deutsches Datumsformat mit Wochentag generieren (Server-unabhängig)
+            wochentage = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
+            df_grouped["Datum_formatiert"] = df_grouped["Datum"].apply(
+                lambda x: f"{wochentage[x.weekday()]}, {x.strftime('%d.%m.')}"
+            )
+            
+            # Das formatierte Datum als X-Achse setzen
+            df_grouped = df_grouped.set_index("Datum_formatiert")
             
             # Streamlit Liniendiagramm zeichnen
             st.line_chart(df_grouped[["Offene Mängel"]])
         else:
             st.info("Noch nicht genug zeitliche Daten für ein Burndown-Chart vorhanden. Erstelle oder erledige einen Mangel.")
-            
+
+
+
+
+                
+        
         st.divider()
         # --- MÄNGELLISTE ---
         st.header("Aktuelle Mängelliste")

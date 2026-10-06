@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import io
+from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
 from db_service import db, get_items, add_item, update_item, get_gewerke
 
 st.set_page_config(page_title="Punchlist & Burndown Tool", layout="wide")
@@ -46,7 +48,7 @@ with st.sidebar.form("mangel_form", clear_on_submit=True):
         else:
             st.warning("Bitte gib mindestens einen Titel ein.")
 
-# --- 4. SIDEBAR: EXCEL EXPORT ---
+# --- 4. SIDEBAR: EXCEL EXPORT MIT FORMATIERUNG ---
 st.sidebar.divider()
 st.sidebar.header("Daten-Export")
 
@@ -64,10 +66,32 @@ try:
             df_export = df_export[["titel", "gewerk", "beschreibung", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]]
             df_export.columns = ["Mangel / Bauteil", "Gewerk", "Beschreibung", "Fortschritt (%)", "Kommentar / Status", "Erstellt am", "Erledigt am"]
             
-            # Excel-Datei im Hintergrund erstellen
+            # Excel-Datei im Hintergrund erstellen und formatieren
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 df_export.to_excel(writer, index=False, sheet_name="Mängelliste")
+                
+                # Formatierung anwenden
+                worksheet = writer.sheets["Mängelliste"]
+                
+                # 1. Spaltenbreiten optimieren
+                for idx, col_name in enumerate(df_export.columns):
+                    col_letter = get_column_letter(idx + 1)
+                    
+                    # Längsten Text in der Spalte finden
+                    max_len = len(str(col_name))
+                    for val in df_export[col_name]:
+                        if val:
+                            max_len = max(max_len, len(str(val)))
+                    
+                    # Spaltenbreite auf maximal 50 begrenzen (für lange Beschreibungen)
+                    optimal_width = min(max_len + 2, 50)
+                    worksheet.column_dimensions[col_letter].width = optimal_width
+                
+                # 2. Textumbruch und vertikale Ausrichtung für automatische Zeilenhöhe
+                for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+                    for cell in row:
+                        cell.alignment = Alignment(wrap_text=True, vertical='top')
             
             # Download-Button anzeigen
             st.sidebar.download_button(

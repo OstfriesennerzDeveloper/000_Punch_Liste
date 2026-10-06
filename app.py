@@ -7,6 +7,14 @@ from db_service import db, get_items, add_item, update_item, get_gewerke, delete
 
 st.set_page_config(page_title="Punchlist & Burndown Tool", layout="wide")
 
+# --- HILFSFUNKTION FÜR DATUM + KW ---
+def format_date_with_kw(date_str):
+    if not date_str or pd.isna(date_str):
+        return ""
+    dt = pd.to_datetime(date_str)
+    kw = dt.isocalendar()[1]
+    return f"{dt.strftime('%d.%m.%Y')} (KW {kw})"
+
 # --- 1. EINFACHE AUTHENTIFIZIERUNG ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -37,12 +45,13 @@ st.sidebar.header("Neuen Mangel erfassen")
 with st.sidebar.form("mangel_form", clear_on_submit=True):
     titel = st.text_input("Titel / Bauteil")
     gewerk = st.selectbox("Gewerk", get_gewerke())
+    ziel_kw = st.text_input("Avisierte Fertigstellung (z.B. KW 42/2026)")
     beschreibung = st.text_area("Beschreibung")
     submitted = st.form_submit_button("Hinzufügen")
     
     if submitted:
         if titel:
-            add_item(titel, gewerk, beschreibung)
+            add_item(titel, gewerk, beschreibung, ziel_kw)
             st.success("Mangel erfolgreich hinzugefügt!")
             st.rerun()
         else:
@@ -57,15 +66,17 @@ try:
     if export_items:
         df_export = pd.DataFrame(export_items)
         if not df_export.empty:
-            for col in ["titel", "gewerk", "beschreibung", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]:
+            # Prüfen ob alle Spalten existieren (für alte Einträge ohne ziel_kw)
+            for col in ["titel", "gewerk", "beschreibung", "ziel_kw", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]:
                 if col not in df_export.columns:
-                    df_export[col] = None
+                    df_export[col] = ""
                     
-            df_export = df_export[["titel", "gewerk", "beschreibung", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]]
-            df_export.columns = ["Mangel / Bauteil", "Gewerk", "Beschreibung", "Fortschritt (%)", "Kommentar / Status", "Erstellt am", "Erledigt am"]
+            df_export = df_export[["titel", "gewerk", "beschreibung", "ziel_kw", "fortschritt", "kommentar", "erstellt_am", "erledigt_am"]]
+            df_export.columns = ["Mangel / Bauteil", "Gewerk", "Beschreibung", "Avisierte Fertigstellung", "Fortschritt (%)", "Kommentar / Status", "Erstellt am", "Erledigt am"]
             
-            for col in ["Erstellt am", "Erledigt am"]:
-                df_export[col] = pd.to_datetime(df_export[col], errors='coerce').dt.strftime('%d.%m.%Y').fillna('')
+            # Datum mit Kalenderwoche berechnen
+            df_export["Erstellt am"] = df_export["Erstellt am"].apply(format_date_with_kw)
+            df_export["Erledigt am"] = df_export["Erledigt am"].apply(format_date_with_kw)
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -102,7 +113,6 @@ try:
     if not items:
         st.info("Noch keine Einträge in der Datenbank. Nutze die Sidebar, um einen Mangel hinzuzufügen.")
     else:
-        # Metriken
         total_items = len(items)
         erledigt = sum(1 for i in items if i.get('fortschritt', 0) == 100)
         offen = total_items - erledigt
@@ -133,8 +143,9 @@ try:
             df_grouped["Offene Mängel"] = df_grouped["Änderung"].cumsum()
             
             wochentage = {0: "Mo", 1: "Di", 2: "Mi", 3: "Do", 4: "Fr", 5: "Sa", 6: "So"}
+            # X-Achse mit Wochentag, Datum und KW formatieren
             df_grouped["Datum_formatiert"] = df_grouped["Datum"].apply(
-                lambda x: f"{wochentage[x.weekday()]}, {x.strftime('%d.%m.')}"
+                lambda x: f"{wochentage[x.weekday()]}, {x.strftime('%d.%m.')} (KW {x.isocalendar()[1]})"
             )
             df_grouped = df_grouped.set_index("Datum_formatiert")
             st.line_chart(df_grouped[["Offene Mängel"]])
@@ -146,11 +157,9 @@ try:
         # --- MÄNGELLISTE MIT FILTER ---
         st.header("Aktuelle Mängelliste")
         
-        # Filter Dropdown
         alle_gewerke = ["Alle anzeigen"] + get_gewerke()
         selected_filter = st.selectbox("Nach Gewerk filtern:", alle_gewerke)
         
-        # Liste filtern
         if selected_filter == "Alle anzeigen":
             anzeige_items = items
         else:
@@ -160,10 +169,18 @@ try:
             st.info(f"Keine Mängel für das Gewerk '{selected_filter}' gefunden.")
             
         for item in anzeige_items:
-            expander_title = f"{item.get('gewerk', 'Allgemein')} | {item.get('titel', 'Ohne Titel')} — Fortschritt: {item.get('fortschritt', 0)}%"
+            # Zeigt die Ziel-KW direkt in der geschlossenen Karte an, wenn vorhanden
+            ziel_text = f" | Ziel: {item.get('ziel_kw')}" if item.get('ziel_kw') else ""
+            expander_title = f"{item.get('gewerk', 'Allgemein')} | {item.get('titel', 'Ohne Titel')}{ziel_text} — Fortschritt: {item.get('fortschritt', 0)}%"
             
             with st.expander(expander_title):
                 st.write(f"**Beschreibung:** {item.get('beschreibung', '-')}")
+                
+                new_ziel_kw = st.text_input(
+                    "Avisierte Fertigstellung (z.B. KW 42/2026)", 
+                    value=item.get('ziel_kw', ''), 
+                    key=f"ziel_{item['id']}"
+                )
                 
                 new_fortschritt = st.slider(
                     "Fortschritt (%)", 
@@ -177,12 +194,11 @@ try:
                     key=f"kommentar_{item['id']}"
                 )
                 
-                # Buttons nebeneinander anordnen
                 col_save, col_delete = st.columns(2)
                 
                 with col_save:
                     if st.button("Änderungen speichern", key=f"btn_save_{item['id']}", use_container_width=True):
-                        update_item(item['id'], new_fortschritt, new_kommentar)
+                        update_item(item['id'], new_fortschritt, new_kommentar, new_ziel_kw)
                         st.success("Erfolgreich gespeichert!")
                         st.rerun()
                         

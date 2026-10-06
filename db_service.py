@@ -30,6 +30,7 @@ db = get_db_connection()
 
 
 # --- 2. PUNCHLIST-FUNKTIONEN ---
+# --- 2. PUNCHLIST-FUNKTIONEN ---
 
 def get_gewerke():
     """Gibt die Liste der Gewerke für Dropdowns zurück."""
@@ -48,26 +49,28 @@ def get_items():
         
     return items_liste
 
-def add_item(titel, gewerk, beschreibung):
-    """Speichert einen neuen Eintrag mit Erstelldatum in Firebase."""
+def add_item(titel, gewerk, beschreibung, ziel_kw):
+    """Speichert einen neuen Eintrag mit Erstelldatum und Ziel-KW in Firebase."""
     maengel_ref = db.collection("maengel")
     maengel_ref.add({
         "titel": titel,
         "gewerk": gewerk,
         "beschreibung": beschreibung,
+        "ziel_kw": ziel_kw, # Neues Feld
         "fortschritt": 0,
         "kommentar": "",
         "erstellt_am": datetime.now().isoformat(), # Neuer Zeitstempel
         "erledigt_am": None
     })
 
-def update_item(doc_id, fortschritt, kommentar):
-    """Aktualisiert einen Eintrag und setzt das Erledigt-Datum bei 100%."""
+def update_item(doc_id, fortschritt, kommentar, ziel_kw):
+    """Aktualisiert einen Eintrag, inkl. Ziel-KW und setzt das Erledigt-Datum bei 100%."""
     doc_ref = db.collection("maengel").document(doc_id)
     
     update_data = {
         "fortschritt": fortschritt,
-        "kommentar": kommentar
+        "kommentar": kommentar,
+        "ziel_kw": ziel_kw # Neues Feld
     }
     
     # Automatischen Zeitstempel setzen, wenn auf 100% geschoben wird
